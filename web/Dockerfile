@@ -1,6 +1,6 @@
 FROM ghcr.io/cirruslabs/flutter:3.35.7 AS build
 WORKDIR /app
-COPY web/pubspec.yaml web/analysis_options.yaml ./
+COPY web/pubspec.yaml web/pubspec.lock web/analysis_options.yaml ./
 RUN flutter pub get
 COPY web/ .
 RUN flutter build web --wasm --release

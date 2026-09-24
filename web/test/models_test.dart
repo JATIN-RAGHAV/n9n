@@ -2,11 +2,26 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:n9n_web/models.dart';
 
 void main() {
+  test('typed config values preserve numeric and boolean comparisons', () {
+    expect(parseConfigValue('7'), 7);
+    expect(parseConfigValue('false'), false);
+    expect(parseConfigValue('{"score": 7}'), {'score': 7});
+    expect(parseConfigValue('{{input.score}}'), '{{input.score}}');
+    expect(parseConfigValue('Ada'), 'Ada');
+  });
   test('graph JSON survives a copy and preserves credential references', () {
     final draft = WorkflowDraft(nodes: [
       WorkflowNode(id: 'trigger', type: 'manual_trigger', x: 30, y: 40),
-      WorkflowNode(id: 'send', type: 'send_email', x: 200, y: 80, config: {'to': '{{input.email}}'}, credentialId: 'secret-id'),
-    ], edges: [WorkflowEdge(id: 'edge', source: 'trigger', target: 'send')]);
+      WorkflowNode(
+          id: 'send',
+          type: 'send_email',
+          x: 200,
+          y: 80,
+          config: {'to': '{{input.email}}'},
+          credentialId: 'secret-id'),
+    ], edges: [
+      WorkflowEdge(id: 'edge', source: 'trigger', target: 'send')
+    ]);
     final copy = draft.copy();
     expect(copy.toJson(), draft.toJson());
     copy.nodes[1].config['to'] = 'changed';

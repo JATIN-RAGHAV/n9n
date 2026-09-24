@@ -7,24 +7,85 @@ import 'package:n9n_web/api.dart';
 import 'package:n9n_web/main.dart';
 
 void main() {
-  testWidgets('register, create a workflow, and open its editor', (tester) async {
+  testWidgets('deep linked editor survives asynchronous session loading',
+      (tester) async {
+    final client = MockClient((request) async {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      final path = request.url.path;
+      final payload = switch (path) {
+        '/api/auth/me' => {
+            'user': {'id': 'user-1', 'email': 'me@example.com'}
+          },
+        '/api/workflows/flow-1' => {
+            'workflow': {
+              'id': 'flow-1',
+              'name': 'Deep link flow',
+              'draft': {'nodes': [], 'edges': []},
+              'active': false
+            }
+          },
+        '/api/nodes' => {'nodes': []},
+        '/api/credentials' => {'credentials': []},
+        _ => {'runs': []},
+      };
+      return http.Response(jsonEncode(payload), 200,
+          headers: {'content-type': 'application/json'});
+    });
+    await tester.pumpWidget(N9nApp(
+      api: Api(client: client),
+      initialUri: Uri.parse('http://localhost/#/workflows/flow-1'),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('Deep link flow'), findsWidgets);
+    expect(find.text('NODE LIBRARY'), findsOneWidget);
+  });
+
+  testWidgets('register, create a workflow, and open its editor',
+      (tester) async {
     final calls = <String>[];
     final client = MockClient((request) async {
       calls.add('${request.method} ${request.url.path}');
       Object payload;
       int status = 200;
       switch ('${request.method} ${request.url.path}') {
-        case 'GET /api/auth/me': status = 401; payload = {'error': 'authentication required'};
-        case 'POST /api/auth/register': payload = {'user': {'id': 'user-1', 'email': 'me@example.com'}};
-        case 'GET /api/workflows': payload = {'workflows': []};
-        case 'GET /api/runs': payload = {'runs': []};
-        case 'POST /api/workflows': payload = {'workflow': {'id': 'flow-1', 'name': 'Welcome flow', 'draft': {'nodes': [], 'edges': []}, 'active': false}};
-        case 'GET /api/workflows/flow-1': payload = {'workflow': {'id': 'flow-1', 'name': 'Welcome flow', 'draft': {'nodes': [], 'edges': []}, 'active': false}};
-        case 'GET /api/nodes': payload = {'nodes': []};
-        case 'GET /api/credentials': payload = {'credentials': []};
-        default: payload = {'runs': []};
+        case 'GET /api/auth/me':
+          status = 401;
+          payload = {'error': 'authentication required'};
+        case 'POST /api/auth/register':
+          payload = {
+            'user': {'id': 'user-1', 'email': 'me@example.com'}
+          };
+        case 'GET /api/workflows':
+          payload = {'workflows': []};
+        case 'GET /api/runs':
+          payload = {'runs': []};
+        case 'POST /api/workflows':
+          payload = {
+            'workflow': {
+              'id': 'flow-1',
+              'name': 'Welcome flow',
+              'draft': {'nodes': [], 'edges': []},
+              'active': false
+            }
+          };
+        case 'GET /api/workflows/flow-1':
+          payload = {
+            'workflow': {
+              'id': 'flow-1',
+              'name': 'Welcome flow',
+              'draft': {'nodes': [], 'edges': []},
+              'active': false
+            }
+          };
+        case 'GET /api/nodes':
+          payload = {'nodes': []};
+        case 'GET /api/credentials':
+          payload = {'credentials': []};
+        default:
+          payload = {'runs': []};
       }
-      return http.Response(jsonEncode(payload), status, headers: {'content-type': 'application/json'});
+      return http.Response(jsonEncode(payload), status,
+          headers: {'content-type': 'application/json'});
     });
     await tester.pumpWidget(N9nApp(api: Api(client: client)));
     await tester.pumpAndSettle();
