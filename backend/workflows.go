@@ -226,6 +226,10 @@ func (s *Server) workflows(w http.ResponseWriter, r *http.Request, uid string, p
 			if a.Input == nil {
 				a.Input = map[string]any{}
 			}
+			if !withinJSONDepth(a.Input) {
+				fail(w, 400, "run input exceeds nesting limit of 32")
+				return
+			}
 			run, e := queueRun(s.db, x.ID, *x.PublishedVersion, a.Input)
 			if e != nil {
 				fail(w, 500, "database error")
@@ -252,6 +256,9 @@ func validateDraft(g Graph) error {
 		}
 		if n.Config == nil {
 			return fmt.Errorf("node %s requires config", n.ID)
+		}
+		if !withinJSONDepth(n.Config) {
+			return fmt.Errorf("node %s config exceeds nesting limit of 32", n.ID)
 		}
 	}
 	edges := map[string]bool{}

@@ -1,104 +1,362 @@
 openapi: 3.1.0
 info:
   title: n9n API
-  version: 0.1.0
+  version: 1.0.0
+  description: Public browser API and private worker protocol for n9n.
 servers:
   - url: /api
+security:
+  - sessionCookie: []
 paths:
   /health:
     get:
-      summary: Health check
-      responses: {'200': {description: Healthy}}
+      operationId: health
+      summary: Check API health
+      security: []
+      responses:
+        '200': {description: Healthy, content: {application/json: {schema: {$ref: '#/components/schemas/Health'}}}}
   /auth/register:
     post:
-      summary: Register and set session cookie
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AuthRequest'}}}}
-      responses: {'200': {description: Authenticated user}}
+      operationId: register
+      summary: Register and set an HttpOnly session cookie
+      security: []
+      requestBody: {$ref: '#/components/requestBodies/Auth'}
+      responses:
+        '200': {$ref: '#/components/responses/Auth'}
+        default: {$ref: '#/components/responses/Error'}
   /auth/login:
     post:
-      summary: Log in and set session cookie
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AuthRequest'}}}}
-      responses: {'200': {description: Authenticated user}}
+      operationId: login
+      summary: Log in and set an HttpOnly session cookie
+      security: []
+      requestBody: {$ref: '#/components/requestBodies/Auth'}
+      responses:
+        '200': {$ref: '#/components/responses/Auth'}
+        default: {$ref: '#/components/responses/Error'}
   /auth/logout:
-    post: {summary: Clear session, responses: {'200': {description: Logged out}}}
+    post:
+      operationId: logout
+      summary: Clear the current session
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        default: {$ref: '#/components/responses/Error'}
   /auth/me:
-    get: {summary: Current user, responses: {'200': {description: User}}}
+    get:
+      operationId: me
+      summary: Get the current account
+      responses:
+        '200': {$ref: '#/components/responses/Auth'}
+        default: {$ref: '#/components/responses/Error'}
+  /oauth/google/start:
+    get:
+      operationId: googleOAuthStart
+      summary: Get a Google OAuth authorization URL bound to this session
+      responses:
+        '200': {description: Authorization URL, content: {application/json: {schema: {type: object, required: [url], properties: {url: {type: string, format: uri}}}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /oauth/google/callback:
+    get:
+      operationId: googleOAuthCallback
+      summary: Exchange the code and store an encrypted Gmail credential
+      parameters:
+        - {name: state, in: query, required: true, schema: {type: string}}
+        - {name: code, in: query, required: true, schema: {type: string}}
+      responses:
+        '302': {description: Redirect to /#/credentials with connected or error query}
+        default: {$ref: '#/components/responses/Error'}
   /nodes:
-    get: {summary: Node catalog, responses: {'200': {description: Catalog}}}
+    get:
+      operationId: listNodes
+      summary: List the versioned node catalog
+      responses:
+        '200': {description: Node catalog, content: {application/json: {schema: {$ref: '#/components/schemas/CatalogResponse'}}}}
+        default: {$ref: '#/components/responses/Error'}
   /workflows:
-    get: {summary: List owned workflows, responses: {'200': {description: Workflow list}}}
-    post: {summary: Create workflow, responses: {'200': {description: Workflow}}}
+    get:
+      operationId: listWorkflows
+      summary: List workflows owned by the session account
+      responses:
+        '200': {description: Workflow list, content: {application/json: {schema: {$ref: '#/components/schemas/WorkflowList'}}}}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: createWorkflow
+      summary: Create a workflow draft
+      requestBody: {$ref: '#/components/requestBodies/WorkflowCreate'}
+      responses:
+        '200': {$ref: '#/components/responses/Workflow'}
+        default: {$ref: '#/components/responses/Error'}
   /workflows/{id}:
-    get: {summary: Get owned workflow, responses: {'200': {description: Workflow}}}
-    put: {summary: Update draft, responses: {'200': {description: Workflow}}}
-    delete: {summary: Delete workflow, responses: {'200': {description: Deleted}}}
+    parameters:
+      - {$ref: '#/components/parameters/id'}
+    get:
+      operationId: getWorkflow
+      summary: Get an owned workflow
+      responses:
+        '200': {$ref: '#/components/responses/Workflow'}
+        default: {$ref: '#/components/responses/Error'}
+    put:
+      operationId: updateWorkflow
+      summary: Save an owned workflow draft and name
+      requestBody: {$ref: '#/components/requestBodies/Workflow'}
+      responses:
+        '200': {$ref: '#/components/responses/Workflow'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: deleteWorkflow
+      summary: Delete an owned workflow and its runs
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        default: {$ref: '#/components/responses/Error'}
   /workflows/{id}/publish:
-    post: {summary: Validate and snapshot draft, responses: {'200': {description: Workflow}}}
+    parameters:
+      - {$ref: '#/components/parameters/id'}
+    post:
+      operationId: publishWorkflow
+      summary: Validate and snapshot the draft as an immutable version
+      responses:
+        '200': {$ref: '#/components/responses/Workflow'}
+        default: {$ref: '#/components/responses/Error'}
   /workflows/{id}/activate:
-    post: {summary: Set active using body {active:boolean}, responses: {'200': {description: Workflow}}}
+    parameters:
+      - {$ref: '#/components/parameters/id'}
+    post:
+      operationId: activateWorkflow
+      summary: Activate or pause published triggers
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [active], properties: {active: {type: boolean}}}}}}
+      responses:
+        '200': {$ref: '#/components/responses/Workflow'}
+        default: {$ref: '#/components/responses/Error'}
   /workflows/{id}/run:
-    post: {summary: Queue a manual run using body {input:object}, responses: {'200': {description: Run}}}
+    parameters:
+      - {$ref: '#/components/parameters/id'}
+    post:
+      operationId: queueManualRun
+      summary: Queue a run against the current published version
+      requestBody: {$ref: '#/components/requestBodies/RunInput'}
+      responses:
+        '200': {$ref: '#/components/responses/Run'}
+        default: {$ref: '#/components/responses/Error'}
   /runs:
-    get: {summary: List owned runs; optional workflow_id query, responses: {'200': {description: Run list}}}
+    get:
+      operationId: listRuns
+      summary: List owned runs, newest first
+      parameters:
+        - {name: workflow_id, in: query, required: false, schema: {type: string}}
+      responses:
+        '200': {description: Run list, content: {application/json: {schema: {$ref: '#/components/schemas/RunList'}}}}
+        default: {$ref: '#/components/responses/Error'}
   /runs/{id}:
-    get: {summary: Run and steps, responses: {'200': {description: Run detail}}}
+    parameters:
+      - {$ref: '#/components/parameters/id'}
+    get:
+      operationId: getRun
+      summary: Get a run and all recorded step events
+      responses:
+        '200': {description: Run detail, content: {application/json: {schema: {$ref: '#/components/schemas/RunDetail'}}}}
+        default: {$ref: '#/components/responses/Error'}
   /runs/{id}/cancel:
-    post: {summary: Cancel queued or active run, responses: {'200': {description: Run}}}
+    parameters:
+      - {$ref: '#/components/parameters/id'}
+    post:
+      operationId: cancelRun
+      summary: Cancel a queued or running run
+      responses:
+        '200': {$ref: '#/components/responses/Run'}
+        default: {$ref: '#/components/responses/Error'}
   /credentials:
-    get: {summary: List credential metadata, responses: {'200': {description: Credential list}}}
-    post: {summary: Create AES encrypted credential using {name,kind,data}, responses: {'200': {description: Credential metadata}}}
+    get:
+      operationId: listCredentials
+      summary: List credential metadata without secret values
+      responses:
+        '200': {description: Credential list, content: {application/json: {schema: {$ref: '#/components/schemas/CredentialList'}}}}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: createCredential
+      summary: Encrypt and store a credential
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CredentialCreate'}}}}
+      responses:
+        '200': {$ref: '#/components/responses/Credential'}
+        default: {$ref: '#/components/responses/Error'}
   /credentials/{id}:
-    delete: {summary: Delete credential, responses: {'200': {description: Deleted}}}
+    parameters:
+      - {$ref: '#/components/parameters/id'}
+    delete:
+      operationId: deleteCredential
+      summary: Delete an owned credential
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        default: {$ref: '#/components/responses/Error'}
   /hooks/{workflow_id}:
-    post: {summary: Queue webhook; X-Webhook-Secret and optional X-Event-ID headers, responses: {'200': {description: Run}}}
+    parameters:
+      - {$ref: '#/components/parameters/workflow_id'}
+    post:
+      operationId: queueWebhook
+      summary: Queue an active webhook event
+      description: Repeating X-Event-ID returns duplicate true. After run retention pruning the run field is null, and the event remains deduplicated.
+      security: []
+      parameters:
+        - {name: X-Webhook-Secret, in: header, required: true, schema: {type: string}}
+        - {name: X-Event-ID, in: header, required: false, schema: {type: string, maxLength: 500}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: true}}}}
+      responses:
+        '200': {$ref: '#/components/responses/Event'}
+        default: {$ref: '#/components/responses/Error'}
   /internal/jobs/claim:
-    post: {summary: Lease next queued job with {runner_id}, responses: {'200': {description: Job or null}}}
+    servers: [{url: /}]
+    post:
+      operationId: claimJob
+      summary: Lease one queued job
+      security: [{runnerBearer: []}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [runner_id], properties: {runner_id: {type: string}}}}}}
+      responses:
+        '200': {description: Job or null, content: {application/json: {schema: {type: object, required: [job], properties: {job: {oneOf: [{$ref: '#/components/schemas/Job'}, {type: 'null'}]}}}}}}
+        default: {$ref: '#/components/responses/Error'}
   /internal/jobs/{id}/heartbeat:
-    post: {summary: Renew lease with {lease_token}, responses: {'200': {description: Renewed}}}
+    servers: [{url: /}]
+    parameters: [{$ref: '#/components/parameters/id'}]
+    post:
+      operationId: heartbeatJob
+      summary: Renew a job lease
+      security: [{runnerBearer: []}]
+      requestBody: {$ref: '#/components/requestBodies/Lease'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        default: {$ref: '#/components/responses/Error'}
   /internal/jobs/{id}/steps:
-    post: {summary: Record step with {lease_token,node_id,status,input,output,error,branch,attempt}, responses: {'200': {description: Recorded}}}
+    servers: [{url: /}]
+    parameters: [{$ref: '#/components/parameters/id'}]
+    post:
+      operationId: recordStep
+      summary: Record a step event under an active lease
+      description: This route accepts up to 4 MiB; public JSON routes accept 1 MiB.
+      security: [{runnerBearer: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/StepEvent'}}}}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        default: {$ref: '#/components/responses/Error'}
   /internal/jobs/{id}/complete:
-    post: {summary: Finish job with {lease_token,status,error}, responses: {'200': {description: Completed}}}
+    servers: [{url: /}]
+    parameters: [{$ref: '#/components/parameters/id'}]
+    post:
+      operationId: completeJob
+      summary: Complete a run under an active lease
+      security: [{runnerBearer: []}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [lease_token, status], properties: {lease_token: {type: string}, status: {type: string, enum: [succeeded, failed, uncertain]}, error: {type: string}}}}}}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        default: {$ref: '#/components/responses/Error'}
   /internal/jobs/{id}/credentials/{credential_id}:
-    get: {summary: Read referenced credential with X-Lease-Token, responses: {'200': {description: Credential including data}}}
+    servers: [{url: /}]
+    parameters:
+      - {$ref: '#/components/parameters/id'}
+      - {$ref: '#/components/parameters/credential_id'}
+      - {name: X-Lease-Token, in: header, required: true, schema: {type: string}}
+    get:
+      operationId: getJobCredential
+      summary: Decrypt a credential referenced by an active leased job
+      security: [{runnerBearer: []}]
+      responses:
+        '200': {$ref: '#/components/responses/PrivateCredential'}
+        default: {$ref: '#/components/responses/Error'}
   /internal/triggers:
-    get: {summary: Active published trigger snapshots and checkpoints, responses: {'200': {description: Triggers}}}
+    servers: [{url: /}]
+    get:
+      operationId: listActiveTriggers
+      summary: List active published trigger snapshots and checkpoints
+      security: [{runnerBearer: []}]
+      responses:
+        '200': {description: Trigger list, content: {application/json: {schema: {type: object, required: [triggers], properties: {triggers: {type: array, items: {$ref: '#/components/schemas/TriggerSnapshot'}}}}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /internal/triggers/{workflow_id}/credentials/{credential_id}:
+    servers: [{url: /}]
+    parameters:
+      - {$ref: '#/components/parameters/workflow_id'}
+      - {$ref: '#/components/parameters/credential_id'}
+      - {name: version, in: query, required: true, schema: {type: integer, minimum: 1}}
+    get:
+      operationId: getTriggerCredential
+      summary: Decrypt the email trigger credential of an active version
+      security: [{runnerBearer: []}]
+      responses:
+        '200': {$ref: '#/components/responses/PrivateCredential'}
+        default: {$ref: '#/components/responses/Error'}
   /internal/triggers/{workflow_id}/events:
-    post: {summary: Atomically dedupe and queue {version,event_id,input,checkpoint}, responses: {'200': {description: Run or duplicate}}}
+    servers: [{url: /}]
+    parameters: [{$ref: '#/components/parameters/workflow_id'}]
+    post:
+      operationId: queueTriggerEvent
+      summary: Deduplicate and queue an active trigger event
+      security: [{runnerBearer: []}]
+      requestBody: {$ref: '#/components/requestBodies/TriggerEvent'}
+      responses:
+        '200': {$ref: '#/components/responses/Event'}
+        default: {$ref: '#/components/responses/Error'}
   /internal/triggers/{workflow_id}/checkpoint:
-    post: {summary: Persist {version,checkpoint}, responses: {'200': {description: Saved}}}
+    servers: [{url: /}]
+    parameters: [{$ref: '#/components/parameters/workflow_id'}]
+    post:
+      operationId: saveTriggerCheckpoint
+      summary: Persist a checkpoint for an active trigger version
+      security: [{runnerBearer: []}]
+      requestBody: {$ref: '#/components/requestBodies/TriggerEvent'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        default: {$ref: '#/components/responses/Error'}
 components:
+  securitySchemes:
+    sessionCookie: {type: apiKey, in: cookie, name: n9n_session}
+    runnerBearer: {type: http, scheme: bearer}
+  parameters:
+    id: {name: id, in: path, required: true, schema: {type: string}}
+    workflow_id: {name: workflow_id, in: path, required: true, schema: {type: string}}
+    credential_id: {name: credential_id, in: path, required: true, schema: {type: string}}
+  requestBodies:
+    Auth: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AuthRequest'}}}}
+    Workflow: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/WorkflowWrite'}}}}
+    WorkflowCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/WorkflowCreate'}}}}
+    RunInput: {required: true, content: {application/json: {schema: {type: object, required: [input], properties: {input: {type: object, additionalProperties: true}}}}}}
+    Lease: {required: true, content: {application/json: {schema: {type: object, required: [lease_token], properties: {lease_token: {type: string}}}}}}
+    TriggerEvent: {required: true, content: {application/json: {schema: {type: object, required: [version], properties: {version: {type: integer, minimum: 1}, event_id: {type: string, maxLength: 500}, input: {type: object, additionalProperties: true}, checkpoint: {}}}}}}
+  responses:
+    Error: {description: Error, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    OK: {description: Completed, content: {application/json: {schema: {type: object, required: [ok], properties: {ok: {type: boolean}}}}}}
+    Auth: {description: Authenticated user, content: {application/json: {schema: {type: object, required: [user], properties: {user: {$ref: '#/components/schemas/User'}}}}}}
+    Workflow: {description: Workflow, content: {application/json: {schema: {type: object, required: [workflow], properties: {workflow: {$ref: '#/components/schemas/Workflow'}}}}}}
+    Run: {description: Run, content: {application/json: {schema: {type: object, required: [run], properties: {run: {$ref: '#/components/schemas/Run'}}}}}}
+    Credential: {description: Credential metadata, content: {application/json: {schema: {type: object, required: [credential], properties: {credential: {$ref: '#/components/schemas/Credential'}}}}}}
+    PrivateCredential: {description: Referenced credential with decrypted data, content: {application/json: {schema: {type: object, required: [credential], properties: {credential: {$ref: '#/components/schemas/PrivateCredential'}}}}}}
+    Event: {description: Queued or duplicate event, content: {application/json: {schema: {$ref: '#/components/schemas/EventResponse'}}}}
   schemas:
-    AuthRequest:
+    Error: {type: object, required: [error], properties: {error: {type: string}}}
+    Health: {type: object, required: [status], properties: {status: {type: string, const: ok}}}
+    AuthRequest: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, minLength: 8, maxLength: 72}}}
+    User: {type: object, required: [id, email], properties: {id: {type: string}, email: {type: string, format: email}}}
+    Node:
       type: object
-      required: [email, password]
+      required: [id, type, config]
       properties:
-        email: {type: string, format: email}
-        password: {type: string, minLength: 8}
-    Graph:
-      type: object
-      required: [nodes, edges]
-      properties:
-        nodes:
-          type: array
-          items:
-            type: object
-            required: [id, type, position, config]
-            properties:
-              id: {type: string}
-              type: {type: string, enum: [manual_trigger, webhook_trigger, schedule_trigger, email_trigger, set_fields, http_request, condition, send_email]}
-              position:
-                type: object
-                properties: {x: {type: number}, y: {type: number}}
-              config: {type: object}
-              credential_id: {type: string}
-        edges:
-          type: array
-          items:
-            type: object
-            required: [id, source, target, source_port]
-            properties:
-              id: {type: string}
-              source: {type: string}
-              target: {type: string}
-              source_port: {type: string, enum: [out, 'true', 'false']}
+        id: {type: string, pattern: '^[A-Za-z0-9_-]+$', maxLength: 100}
+        type: {type: string, enum: [manual_trigger, webhook_trigger, schedule_trigger, email_trigger, set_fields, http_request, condition, send_email]}
+        position: {oneOf: [{type: object, properties: {x: {type: number}, y: {type: number}}}, {type: 'null'}]}
+        config: {type: object, additionalProperties: true}
+        credential_id: {type: string}
+    Edge: {type: object, required: [id, source, target, source_port], properties: {id: {type: string}, source: {type: string}, target: {type: string}, source_port: {type: string, enum: [out, 'true', 'false']}}}
+    Graph: {type: object, required: [nodes, edges], properties: {nodes: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/Node'}}, edges: {type: array, maxItems: 300, items: {$ref: '#/components/schemas/Edge'}}}}
+    WorkflowWrite: {type: object, required: [name, draft], properties: {name: {type: string, maxLength: 200}, draft: {$ref: '#/components/schemas/Graph'}}}
+    WorkflowCreate: {type: object, properties: {name: {type: string, maxLength: 200}, draft: {$ref: '#/components/schemas/Graph'}}}
+    Workflow: {allOf: [{$ref: '#/components/schemas/WorkflowWrite'}, {type: object, required: [id, published_version, active, created_at, updated_at], properties: {id: {type: string}, published_version: {type: [integer, 'null'], minimum: 1}, active: {type: boolean}, created_at: {type: string, format: date-time}, updated_at: {type: string, format: date-time}}}]}
+    WorkflowList: {type: object, required: [workflows], properties: {workflows: {type: array, items: {$ref: '#/components/schemas/Workflow'}}}}
+    Run: {type: object, required: [id, workflow_id, version, status, input, created_at, updated_at], properties: {id: {type: string}, workflow_id: {type: string}, version: {type: integer}, status: {type: string, enum: [queued, running, succeeded, failed, cancelled, uncertain]}, input: {type: object, additionalProperties: true}, error: {type: string}, created_at: {type: string, format: date-time}, updated_at: {type: string, format: date-time}}}
+    RunList: {type: object, required: [runs], properties: {runs: {type: array, items: {$ref: '#/components/schemas/Run'}}}}
+    Step: {type: object, required: [node_id, status, input, output, attempt, created_at], properties: {node_id: {type: string}, status: {type: string, enum: [running, succeeded, failed, skipped]}, input: {}, output: {}, error: {type: string}, branch: {type: string, enum: ['true', 'false']}, attempt: {type: integer}, created_at: {type: string, format: date-time}}}
+    RunDetail: {type: object, required: [run, steps], properties: {run: {$ref: '#/components/schemas/Run'}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}}}
+    Credential: {type: object, required: [id, name, kind, created_at], properties: {id: {type: string}, name: {type: string}, kind: {type: string}, created_at: {type: string, format: date-time}}}
+    PrivateCredential: {type: object, required: [id, name, kind, data], properties: {id: {type: string}, name: {type: string}, kind: {type: string}, data: {type: object, additionalProperties: true}}}
+    CredentialCreate: {type: object, required: [name, kind, data], properties: {name: {type: string, maxLength: 200}, kind: {type: string, maxLength: 100}, data: {type: object, additionalProperties: true}}}
+    CredentialList: {type: object, required: [credentials], properties: {credentials: {type: array, items: {$ref: '#/components/schemas/Credential'}}}}
+    CatalogEntry: {type: object, required: [type, name, category, description, config_schema, input_ports, output_ports, input_schema, output_schema], properties: {type: {type: string}, name: {type: string}, category: {type: string}, description: {type: string}, config_schema: {type: object, additionalProperties: true}, input_ports: {type: array, items: {type: string}}, output_ports: {type: array, items: {type: string}}, input_schema: {type: object, additionalProperties: true}, output_schema: {type: object, additionalProperties: true}}}
+    CatalogResponse: {type: object, required: [version, nodes], properties: {version: {type: integer, const: 1}, nodes: {type: array, items: {$ref: '#/components/schemas/CatalogEntry'}}}}
+    EventResponse: {type: object, required: [run, duplicate], properties: {run: {oneOf: [{$ref: '#/components/schemas/Run'}, {type: 'null'}]}, duplicate: {type: boolean}}}
+    Job: {type: object, required: [id, lease_token, workflow_id, version, graph, input, steps], properties: {id: {type: string}, lease_token: {type: string}, workflow_id: {type: string}, version: {type: integer}, graph: {$ref: '#/components/schemas/Graph'}, input: {type: object, additionalProperties: true}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}}}
+    StepEvent: {type: object, required: [lease_token, node_id, status, input, output], properties: {lease_token: {type: string}, node_id: {type: string}, status: {type: string, enum: [running, succeeded, failed, skipped]}, input: {}, output: {}, error: {type: string}, branch: {type: string, enum: ['', 'true', 'false']}, attempt: {type: integer}}}
+    TriggerSnapshot: {type: object, required: [workflow_id, version, node, checkpoint], properties: {workflow_id: {type: string}, version: {type: integer}, node: {$ref: '#/components/schemas/Node'}, checkpoint: {}}}

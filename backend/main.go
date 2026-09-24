@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,7 +34,10 @@ type Server struct {
 	authWindows map[string]authWindow
 	authSlots   chan struct{}
 }
-type authWindow struct { Start time.Time; Count int }
+type authWindow struct {
+	Start time.Time
+	Count int
+}
 type Node struct {
 	ID           string             `json:"id"`
 	Type         string             `json:"type"`
@@ -102,14 +106,23 @@ func main() {
 	server := &http.Server{Addr: env("ADDR", ":8080"), Handler: s, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go s.maintain(ctx)
+	maintenanceDone := make(chan struct{})
+	go func() { defer close(maintenanceDone); s.maintain(ctx) }()
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil { log.Printf("shutdown: %v", err) }
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
 	}()
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) { log.Fatal(err) }
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
+	<-shutdownDone
+	<-maintenanceDone
 }
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {
@@ -142,38 +155,68 @@ func NewServer(path, key, token string) (*Server, error) {
 	db.SetMaxOpenConns(1)
 	s := &Server{db: db, runnerToken: token, secure: os.Getenv("COOKIE_SECURE") == "true", authWindows: map[string]authWindow{}, authSlots: make(chan struct{}, 4)}
 	copy(s.key[:], keyBytes)
-	if err = migrate(db); err != nil { db.Close(); return nil, err }
+	if err = migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
 func migrate(db *sql.DB) error {
 	tx, err := db.Begin()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer tx.Rollback()
 	var version int
-	if err = tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil { return err }
-	if version > 1 { return errors.New("database schema is newer than this server") }
+	if err = tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version > 1 {
+		return errors.New("database schema is newer than this server")
+	}
 	if version == 0 {
-		for _, q := range schema { if _, err = tx.Exec(q); err != nil { return err } }
-		if _, err = tx.Exec(`PRAGMA user_version = 1`); err != nil { return err }
+		for _, q := range schema {
+			if _, err = tx.Exec(q); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(`PRAGMA user_version = 1`); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
 
 func (s *Server) maintain(ctx context.Context) {
-	run := func() {
-		cutoff := now()
-		if _, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at<?`, cutoff); err != nil { log.Printf("session cleanup: %v", err) }
-		if _, err := s.db.Exec(`DELETE FROM oauth_states WHERE expires_at<?`, cutoff); err != nil { log.Printf("OAuth state cleanup: %v", err) }
-		days, err := strconv.Atoi(env("RUN_RETENTION_DAYS", "30"))
-		if err != nil || days < 1 { days = 30 }
-		before := time.Now().UTC().AddDate(0, 0, -days).Format(timeLayout)
-		if _, err := s.db.Exec(`DELETE FROM runs WHERE status IN ('succeeded','failed','cancelled','uncertain') AND updated_at<?`, before); err != nil { log.Printf("run cleanup: %v", err) }
-	}
-	run()
+	s.cleanup()
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
-	for { select { case <-ctx.Done(): return; case <-ticker.C: run() } }
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.cleanup()
+		}
+	}
+}
+func (s *Server) cleanup() {
+	cutoff := now()
+	if _, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at<?`, cutoff); err != nil {
+		log.Printf("session cleanup: %v", err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM oauth_states WHERE expires_at<?`, cutoff); err != nil {
+		log.Printf("OAuth state cleanup: %v", err)
+	}
+	days, err := strconv.Atoi(env("RUN_RETENTION_DAYS", "30"))
+	if err != nil || days < 1 {
+		days = 30
+	}
+	before := time.Now().UTC().AddDate(0, 0, -days).Format(timeLayout)
+	if _, err := s.db.Exec(`DELETE FROM runs WHERE status IN ('succeeded','failed','cancelled','uncertain') AND updated_at<?`, before); err != nil {
+		log.Printf("run cleanup: %v", err)
+	}
 }
 
 var schema = []string{
@@ -219,6 +262,30 @@ func decodeLimit(r *http.Request, v any, bytes int64) error {
 		return errors.New("unexpected trailing JSON")
 	}
 	return nil
+}
+func withinJSONDepth(value any) bool {
+	var check func(any, int) bool
+	check = func(item any, depth int) bool {
+		if depth > 32 {
+			return false
+		}
+		switch node := item.(type) {
+		case map[string]any:
+			for _, child := range node {
+				if !check(child, depth+1) {
+					return false
+				}
+			}
+		case []any:
+			for _, child := range node {
+				if !check(child, depth+1) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return check(value, 1)
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" && r.Method != "HEAD" {
@@ -272,7 +339,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch parts[0] {
 	case "nodes":
 		if len(parts) == 1 && r.Method == "GET" {
-			write(w, 200, map[string]any{"nodes": catalog})
+			write(w, 200, map[string]any{"version": 1, "nodes": catalog})
 			return
 		}
 	case "workflows":
@@ -333,6 +400,17 @@ func (s *Server) auth(w http.ResponseWriter, r *http.Request, action string) {
 		fail(w, 404, "not found")
 		return
 	}
+	if !s.allowAuth(r) {
+		fail(w, 429, "too many authentication attempts; try again shortly")
+		return
+	}
+	select {
+	case s.authSlots <- struct{}{}:
+		defer func() { <-s.authSlots }()
+	default:
+		fail(w, 429, "authentication is busy; try again shortly")
+		return
+	}
 	var a struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -372,4 +450,33 @@ func (s *Server) auth(w http.ResponseWriter, r *http.Request, action string) {
 		return
 	}
 	write(w, 200, map[string]any{"user": map[string]string{"id": uid, "email": a.Email}})
+}
+func (s *Server) allowAuth(r *http.Request) bool {
+	ip := r.Header.Get("X-Real-IP")
+	if ip == "" {
+		ip, _, _ = net.SplitHostPort(r.RemoteAddr)
+	}
+	if net.ParseIP(ip) == nil {
+		ip = "unknown"
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	current := time.Now()
+	if len(s.authWindows) > 1024 {
+		for key, window := range s.authWindows {
+			if current.Sub(window.Start) >= time.Minute {
+				delete(s.authWindows, key)
+			}
+		}
+	}
+	window := s.authWindows[ip]
+	if current.Sub(window.Start) >= time.Minute {
+		window = authWindow{Start: current}
+	}
+	if window.Count >= 20 {
+		return false
+	}
+	window.Count++
+	s.authWindows[ip] = window
+	return true
 }

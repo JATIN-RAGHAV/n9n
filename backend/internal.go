@@ -373,6 +373,10 @@ func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []st
 	if a.Input == nil {
 		a.Input = map[string]any{}
 	}
+	if !withinJSONDepth(a.Input) || !withinJSONDepth(a.Checkpoint) {
+		fail(w, 400, "trigger event exceeds nesting limit of 32")
+		return
+	}
 	tx, e := s.db.Begin()
 	if e != nil {
 		fail(w, 500, "database error")

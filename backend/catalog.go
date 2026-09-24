@@ -16,6 +16,25 @@ var catalog = []map[string]any{
 	{"type": "send_email", "name": "Send Email", "category": "Action", "description": "Send an email through Gmail.", "config_schema": map[string]any{"type": "object", "required": []string{"to", "subject", "body"}, "properties": map[string]any{"to": map[string]string{"type": "string"}, "subject": map[string]string{"type": "string"}, "body": map[string]string{"type": "string"}}}, "input_ports": []string{"in"}, "output_ports": []string{"out"}},
 }
 
+func init() {
+	anyObject := map[string]any{"type": "object", "additionalProperties": true}
+	for _, entry := range catalog {
+		entry["input_schema"] = anyObject
+		output := map[string]any{"type": "object", "additionalProperties": true}
+		switch entry["type"] {
+		case "schedule_trigger":
+			output["properties"] = map[string]any{"scheduled_at": map[string]any{"type": "string", "format": "date-time"}}
+		case "email_trigger":
+			output["properties"] = map[string]any{"id": map[string]any{"type": "string"}, "thread_id": map[string]any{"type": "string"}, "sender": map[string]any{"type": "string"}, "subject": map[string]any{"type": "string"}, "body": map[string]any{"type": "string"}, "snippet": map[string]any{"type": "string"}, "headers": map[string]any{"type": "object"}, "message": map[string]any{"type": "object"}}
+		case "http_request":
+			output["properties"] = map[string]any{"status": map[string]any{"type": "integer"}, "headers": map[string]any{"type": "object"}, "body": map[string]any{}}
+		case "send_email":
+			output["properties"] = map[string]any{"id": map[string]any{"type": "string"}, "threadId": map[string]any{"type": "string"}}
+		}
+		entry["output_schema"] = output
+	}
+}
+
 func (s *Server) hook(w http.ResponseWriter, r *http.Request, wid string) {
 	var version int
 	var graphStr string
@@ -46,6 +65,10 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request, wid string) {
 	}
 	if input == nil {
 		input = map[string]any{}
+	}
+	if !withinJSONDepth(input) {
+		fail(w, 400, "webhook input exceeds nesting limit of 32")
+		return
 	}
 	event := r.Header.Get("X-Event-ID")
 	if event == "" {
