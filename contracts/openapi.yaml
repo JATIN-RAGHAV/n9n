@@ -1,0 +1,104 @@
+openapi: 3.1.0
+info:
+  title: n9n API
+  version: 0.1.0
+servers:
+  - url: /api
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses: {'200': {description: Healthy}}
+  /auth/register:
+    post:
+      summary: Register and set session cookie
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AuthRequest'}}}}
+      responses: {'200': {description: Authenticated user}}
+  /auth/login:
+    post:
+      summary: Log in and set session cookie
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AuthRequest'}}}}
+      responses: {'200': {description: Authenticated user}}
+  /auth/logout:
+    post: {summary: Clear session, responses: {'200': {description: Logged out}}}
+  /auth/me:
+    get: {summary: Current user, responses: {'200': {description: User}}}
+  /nodes:
+    get: {summary: Node catalog, responses: {'200': {description: Catalog}}}
+  /workflows:
+    get: {summary: List owned workflows, responses: {'200': {description: Workflow list}}}
+    post: {summary: Create workflow, responses: {'200': {description: Workflow}}}
+  /workflows/{id}:
+    get: {summary: Get owned workflow, responses: {'200': {description: Workflow}}}
+    put: {summary: Update draft, responses: {'200': {description: Workflow}}}
+    delete: {summary: Delete workflow, responses: {'200': {description: Deleted}}}
+  /workflows/{id}/publish:
+    post: {summary: Validate and snapshot draft, responses: {'200': {description: Workflow}}}
+  /workflows/{id}/activate:
+    post: {summary: Set active using body {active:boolean}, responses: {'200': {description: Workflow}}}
+  /workflows/{id}/run:
+    post: {summary: Queue a manual run using body {input:object}, responses: {'200': {description: Run}}}
+  /runs:
+    get: {summary: List owned runs; optional workflow_id query, responses: {'200': {description: Run list}}}
+  /runs/{id}:
+    get: {summary: Run and steps, responses: {'200': {description: Run detail}}}
+  /runs/{id}/cancel:
+    post: {summary: Cancel queued or active run, responses: {'200': {description: Run}}}
+  /credentials:
+    get: {summary: List credential metadata, responses: {'200': {description: Credential list}}}
+    post: {summary: Create AES encrypted credential using {name,kind,data}, responses: {'200': {description: Credential metadata}}}
+  /credentials/{id}:
+    delete: {summary: Delete credential, responses: {'200': {description: Deleted}}}
+  /hooks/{workflow_id}:
+    post: {summary: Queue webhook; X-Webhook-Secret and optional X-Event-ID headers, responses: {'200': {description: Run}}}
+  /internal/jobs/claim:
+    post: {summary: Lease next queued job with {runner_id}, responses: {'200': {description: Job or null}}}
+  /internal/jobs/{id}/heartbeat:
+    post: {summary: Renew lease with {lease_token}, responses: {'200': {description: Renewed}}}
+  /internal/jobs/{id}/steps:
+    post: {summary: Record step with {lease_token,node_id,status,input,output,error,branch,attempt}, responses: {'200': {description: Recorded}}}
+  /internal/jobs/{id}/complete:
+    post: {summary: Finish job with {lease_token,status,error}, responses: {'200': {description: Completed}}}
+  /internal/jobs/{id}/credentials/{credential_id}:
+    get: {summary: Read referenced credential with X-Lease-Token, responses: {'200': {description: Credential including data}}}
+  /internal/triggers:
+    get: {summary: Active published trigger snapshots and checkpoints, responses: {'200': {description: Triggers}}}
+  /internal/triggers/{workflow_id}/events:
+    post: {summary: Atomically dedupe and queue {version,event_id,input,checkpoint}, responses: {'200': {description: Run or duplicate}}}
+  /internal/triggers/{workflow_id}/checkpoint:
+    post: {summary: Persist {version,checkpoint}, responses: {'200': {description: Saved}}}
+components:
+  schemas:
+    AuthRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, format: email}
+        password: {type: string, minLength: 8}
+    Graph:
+      type: object
+      required: [nodes, edges]
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            required: [id, type, position, config]
+            properties:
+              id: {type: string}
+              type: {type: string, enum: [manual_trigger, webhook_trigger, schedule_trigger, email_trigger, set_fields, http_request, condition, send_email]}
+              position:
+                type: object
+                properties: {x: {type: number}, y: {type: number}}
+              config: {type: object}
+              credential_id: {type: string}
+        edges:
+          type: array
+          items:
+            type: object
+            required: [id, source, target, source_port]
+            properties:
+              id: {type: string}
+              source: {type: string}
+              target: {type: string}
+              source_port: {type: string, enum: [out, 'true', 'false']}

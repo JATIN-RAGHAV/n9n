@@ -1,0 +1,9 @@
+.git
+.env
+**/.dart_tool
+**/build
+**/target
+**/.DS_Store
+**/*.db
+**/*.db-shm
+**/*.db-wal

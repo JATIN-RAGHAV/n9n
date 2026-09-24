@@ -1,0 +1,10 @@
+.env
+.DS_Store
+.dart_tool/
+.flutter-plugins*
+build/
+runner/target/
+backend/n9n-backend
+*.db
+*.db-shm
+*.db-wal

@@ -1,0 +1,42 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      ADDR: :8080
+      DATABASE_PATH: /data/n9n.db
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Run make setup first}
+      RUNNER_TOKEN: ${RUNNER_TOKEN:?Run make setup first}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:8080}
+    volumes:
+      - n9n_data:/data
+    restart: unless-stopped
+
+  runner:
+    build:
+      context: .
+      dockerfile: runner/Dockerfile
+    environment:
+      BACKEND_URL: http://backend:8080
+      RUNNER_TOKEN: ${RUNNER_TOKEN:?Run make setup first}
+      RUNNER_ID: ${RUNNER_ID:-runner-1}
+      RUNNER_POLL_MS: ${RUNNER_POLL_MS:-1000}
+      ALLOW_PRIVATE_HTTP: ${ALLOW_PRIVATE_HTTP:-false}
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  n9n_data:
