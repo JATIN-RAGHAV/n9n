@@ -21,12 +21,12 @@ def main():
     # Native login must not establish an ambient browser cookie session.
     client.call('GET', '/api/auth/me', expected=401)
     workflow = client.call('POST', '/api/workflows', {'name': 'Native session smoke', 'draft': {
-        'nodes': [node('trigger', 'manual_trigger'), node('result', 'set_fields', {'fields': {'client': 'mobile'}})],
+        'nodes': [node('trigger', 'manual_trigger'), node('result', 'set_fields', {'fields': {'client': '{{input.client}}'}})],
         'edges': [edge('connection', 'trigger', 'result')],
     }}, headers=headers)['workflow']
     wid = workflow['id']
     client.call('POST', f'/api/workflows/{wid}/publish', headers=headers)
-    run = client.call('POST', f'/api/workflows/{wid}/run', {'input': {}}, headers=headers)['run']
+    run = client.call('POST', f'/api/workflows/{wid}/run', {'input': {'client': 'mobile'}}, headers=headers)['run']
     # The shared helper receives a bound bearer header on every polling call.
     class NativeClient:
         def call(self, method, path):

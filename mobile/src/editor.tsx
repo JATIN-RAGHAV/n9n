@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, ScrollView, View } from 'react-native';
 import { Api, ApiError } from './api';
 import { addNode, connect, removeEdge, removeNode, updateNode, validateDraft } from './graph';
 import { Action, Chip, ErrorText, Field, Label, Panel, usePalette } from './theme';
-import { ALL_TYPES, Draft, JsonObject, NODE_NAMES, NodeType, Port, Workflow, WorkflowNode } from './types';
+import { ALL_TYPES, Credential, Draft, JsonObject, NEEDS_GMAIL, NODE_NAMES, NodeType, Port, Workflow } from './types';
 
 function describe(error: unknown) { return error instanceof Error ? error.message : String(error); }
 
@@ -13,10 +13,12 @@ export function EditorScreen({ api, workflowId, onRun, onDirtyChange, onUnauthor
 }) {
   const p = usePalette();
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
+  const [credentials, setCredentials] = useState<Credential[]>([]);
   const [draft, setDraft] = useState<Draft>({ nodes: [], edges: [] });
   const [name, setName] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [rawConfig, setRawConfig] = useState('{}');
+  const [runInput, setRunInput] = useState('{}');
   const [source, setSource] = useState<string | null>(null);
   const [port, setPort] = useState<Port>('out');
   const [target, setTarget] = useState<string | null>(null);
@@ -28,8 +30,9 @@ export function EditorScreen({ api, workflowId, onRun, onDirtyChange, onUnauthor
 
   const load = useCallback(async () => {
     try {
-      const result = await api.workflow(workflowId);
+      const [result, credentialResult] = await Promise.all([api.workflow(workflowId), api.credentials()]);
       setWorkflow(result.workflow); setName(result.workflow.name); setDraft(result.workflow.draft);
+      setCredentials(credentialResult.credentials.filter(item => item.kind === 'gmail_oauth'));
       setSaved(true); setError(null);
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) onUnauthorized(); else setError(describe(e));
@@ -80,7 +83,9 @@ export function EditorScreen({ api, workflowId, onRun, onDirtyChange, onUnauthor
   const run = async () => {
     try {
       if (!workflow?.published_version) { setError('Publish this workflow before running it.'); return; }
-      const result = await api.startRun(workflowId, {}); onRun(result.run.id);
+      const input: unknown = JSON.parse(runInput);
+      if (input === null || Array.isArray(input) || typeof input !== 'object') throw new Error('Run input must be a JSON object.');
+      const result = await api.startRun(workflowId, input as JsonObject); onRun(result.run.id);
     } catch (e) { if (e instanceof ApiError && e.status === 401) onUnauthorized(); else setError(describe(e)); }
   };
   const makeConnection = () => {
@@ -95,6 +100,11 @@ export function EditorScreen({ api, workflowId, onRun, onDirtyChange, onUnauthor
     <Label size={26} bold>Workflow editor</Label>
     <Label muted size={12} style={{ marginTop: 4, marginBottom: 15 }}>{workflow?.active ? 'Active' : workflow?.published_version ? `Published v${workflow.published_version}` : 'Draft'} · {workflowId.slice(0, 12)}</Label>
     <Field label="Workflow name" value={name} onChangeText={value => { setName(value); setSaved(false); }} placeholder="New workflow" autoCapitalize="sentences" />
+    <Panel style={{ marginBottom: 14 }}>
+      <Label size={15} bold>Manual run input</Label>
+      <Label muted size={12} style={{ marginTop: 4, marginBottom: 10 }}>JSON passed to the trigger. Use an empty object when no values are needed.</Label>
+      <Field label="Run input JSON" value={runInput} onChangeText={setRunInput} multiline autoCapitalize="none" />
+    </Panel>
     <View style={{ flexDirection: 'row', gap: 8 }}>
       <View style={{ flex: 1 }}><Action title={saving ? 'Saving…' : 'Save draft'} disabled={saving || saved} onPress={save} /></View>
       <View style={{ flex: 1 }}><Action title="Publish" secondary onPress={publish} /></View>
@@ -127,6 +137,20 @@ export function EditorScreen({ api, workflowId, onRun, onDirtyChange, onUnauthor
       <Label muted size={12} style={{ marginTop: 5, marginBottom: 12 }}>Edit this node’s JSON config. Use mappings like {'{{input.email}}'} or {'{{nodes.node_id.output}}'} where supported.</Label>
       <Field label="Config JSON" value={rawConfig} onChangeText={setRawConfig} multiline autoCapitalize="none" />
       <Action title="Apply config" onPress={commitConfig} />
+      {NEEDS_GMAIL.includes(selectedNode.type) && <View style={{ marginTop: 15 }}>
+        <Label size={12} bold>GMAIL CREDENTIAL</Label>
+        <Label muted size={12} style={{ marginTop: 4 }}>Choose the saved mailbox used by this node.</Label>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginVertical: 6 }}>
+          <Chip title="None" selected={!selectedNode.credential_id} onPress={() => {
+            changeDraft({ ...draft, nodes: draft.nodes.map(n => n.id === selectedNode.id ? { ...n, credential_id: undefined } : n) });
+          }} />
+          {credentials.map(credential => <Chip key={credential.id} title={credential.name}
+            selected={selectedNode.credential_id === credential.id} onPress={() => {
+              changeDraft({ ...draft, nodes: draft.nodes.map(n => n.id === selectedNode.id ? { ...n, credential_id: credential.id } : n) });
+            }} />)}
+        </View>
+        {credentials.length === 0 && <Label muted size={12}>No Gmail credential found. Add one under Credentials, then reopen this workflow.</Label>}
+      </View>}
     </Panel>}
 
     <Label size={20} bold style={{ marginTop: 25 }}>Connect nodes</Label>
@@ -161,5 +185,6 @@ export function EditorScreen({ api, workflowId, onRun, onDirtyChange, onUnauthor
       </Panel>;
     })}
     {draft.edges.length === 0 && <Label muted style={{ marginTop: 8 }}>No connections yet.</Label>}
+
   </ScrollView>;
 }
