@@ -341,7 +341,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) >= 2 && parts[0] == "auth" {
-		s.auth(w, r, parts[1])
+		if len(parts) == 2 {
+			s.auth(w, r, parts[1])
+		} else if len(parts) == 3 && parts[1] == "mobile" {
+			s.auth(w, r, "mobile/"+parts[2])
+		} else {
+			fail(w, 404, "not found")
+		}
 		return
 	}
 	if len(parts) == 2 && parts[0] == "hooks" && r.Method == "POST" {
@@ -372,20 +378,46 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fail(w, 404, "not found")
 }
 func (s *Server) user(r *http.Request) string {
-	c, e := r.Cookie("n9n_session")
-	if e != nil {
+	token, _ := sessionToken(r)
+	if token == "" {
 		return ""
 	}
-	h := sha256.Sum256([]byte(c.Value))
+	h := sha256.Sum256([]byte(token))
 	var uid string
 	_ = s.db.QueryRow(`SELECT user_id FROM sessions WHERE token_hash=$1 AND expires_at>$2`, hex.EncodeToString(h[:]), now()).Scan(&uid)
 	return uid
 }
-func (s *Server) session(w http.ResponseWriter, uid string) error {
+
+func sessionToken(r *http.Request) (string, bool) {
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		if !strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+			return "", true
+		}
+		token := strings.TrimSpace(auth[7:])
+		if token == "" || strings.ContainsAny(token, " \t\r\n") {
+			return "", true
+		}
+		return token, true
+	}
+	c, e := r.Cookie("n9n_session")
+	if e != nil {
+		return "", false
+	}
+	return c.Value, false
+}
+
+func (s *Server) newSession(uid string) (string, time.Time, error) {
 	t := id() + id()
 	h := sha256.Sum256([]byte(t))
 	expiry := time.Now().UTC().Add(30 * 24 * time.Hour)
 	_, err := s.db.Exec(`INSERT INTO sessions VALUES($1,$2,$3)`, hex.EncodeToString(h[:]), uid, expiry.Format(timeLayout))
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return t, expiry, nil
+}
+func (s *Server) session(w http.ResponseWriter, uid string) error {
+	t, expiry, err := s.newSession(uid)
 	if err != nil {
 		return err
 	}
@@ -393,6 +425,14 @@ func (s *Server) session(w http.ResponseWriter, uid string) error {
 	return nil
 }
 func (s *Server) auth(w http.ResponseWriter, r *http.Request, action string) {
+	mobile := strings.HasPrefix(action, "mobile/")
+	if mobile {
+		action = strings.TrimPrefix(action, "mobile/")
+	}
+	if mobile && action != "login" && action != "register" {
+		fail(w, 404, "not found")
+		return
+	}
 	if action == "me" && r.Method == "GET" {
 		uid := s.user(r)
 		if uid == "" {
@@ -405,11 +445,21 @@ func (s *Server) auth(w http.ResponseWriter, r *http.Request, action string) {
 		return
 	}
 	if action == "logout" && r.Method == "POST" {
-		if c, e := r.Cookie("n9n_session"); e == nil {
-			h := sha256.Sum256([]byte(c.Value))
-			_, _ = s.db.Exec(`DELETE FROM sessions WHERE token_hash=$1`, hex.EncodeToString(h[:]))
+		token, bearer := sessionToken(r)
+		if bearer && (token == "" || s.user(r) == "") {
+			fail(w, 401, "authentication required")
+			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "n9n_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure})
+		if token != "" {
+			h := sha256.Sum256([]byte(token))
+			if _, e := s.db.Exec(`DELETE FROM sessions WHERE token_hash=$1`, hex.EncodeToString(h[:])); e != nil {
+				fail(w, 500, "session error")
+				return
+			}
+		}
+		if !bearer {
+			http.SetCookie(w, &http.Cookie{Name: "n9n_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure})
+		}
 		write(w, 200, map[string]bool{"ok": true})
 		return
 	}
@@ -462,11 +512,22 @@ func (s *Server) auth(w http.ResponseWriter, r *http.Request, action string) {
 			return
 		}
 	}
+	user := map[string]string{"id": uid, "email": a.Email}
+	if mobile {
+		token, expiry, e := s.newSession(uid)
+		if e != nil {
+			fail(w, 500, "session error")
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		write(w, 200, map[string]any{"user": user, "token": token, "expires_at": expiry.Format(timeLayout)})
+		return
+	}
 	if e := s.session(w, uid); e != nil {
 		fail(w, 500, "session error")
 		return
 	}
-	write(w, 200, map[string]any{"user": map[string]string{"id": uid, "email": a.Email}})
+	write(w, 200, map[string]any{"user": user})
 }
 func (s *Server) allowAuth(r *http.Request) bool {
 	ip := r.Header.Get("X-Real-IP")

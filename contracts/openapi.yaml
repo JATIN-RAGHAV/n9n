@@ -7,6 +7,7 @@ servers:
   - url: /api
 security:
   - sessionCookie: []
+  - mobileBearer: []
 paths:
   /health:
     get:
@@ -33,6 +34,24 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/Auth'}
         default: {$ref: '#/components/responses/Error'}
+  /auth/mobile/register:
+    post:
+      operationId: mobileRegister
+      summary: Register a mobile account and issue a bearer session
+      security: []
+      requestBody: {$ref: '#/components/requestBodies/Auth'}
+      responses:
+        '200': {$ref: '#/components/responses/MobileAuth'}
+        default: {$ref: '#/components/responses/Error'}
+  /auth/mobile/login:
+    post:
+      operationId: mobileLogin
+      summary: Log in on mobile and issue a bearer session
+      security: []
+      requestBody: {$ref: '#/components/requestBodies/Auth'}
+      responses:
+        '200': {$ref: '#/components/responses/MobileAuth'}
+        default: {$ref: '#/components/responses/Error'}
   /auth/logout:
     post:
       operationId: logout
@@ -51,6 +70,7 @@ paths:
     get:
       operationId: googleOAuthStart
       summary: Get a Google OAuth authorization URL bound to this session
+      security: [{sessionCookie: []}]
       responses:
         '200': {description: Authorization URL, content: {application/json: {schema: {type: object, required: [url], properties: {url: {type: string, format: uri}}}}}}
         default: {$ref: '#/components/responses/Error'}
@@ -58,6 +78,7 @@ paths:
     get:
       operationId: googleOAuthCallback
       summary: Exchange the code and store an encrypted Gmail credential
+      security: [{sessionCookie: []}]
       parameters:
         - {name: state, in: query, required: true, schema: {type: string}}
         - {name: code, in: query, required: true, schema: {type: string}}
@@ -305,6 +326,7 @@ paths:
 components:
   securitySchemes:
     sessionCookie: {type: apiKey, in: cookie, name: n9n_session}
+    mobileBearer: {type: http, scheme: bearer, description: User session token from mobile login or registration; not RUNNER_TOKEN}
     runnerBearer: {type: http, scheme: bearer}
   parameters:
     id: {name: id, in: path, required: true, schema: {type: string}}
@@ -321,6 +343,7 @@ components:
     Error: {description: Error, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     OK: {description: Completed, content: {application/json: {schema: {type: object, required: [ok], properties: {ok: {type: boolean}}}}}}
     Auth: {description: Authenticated user, content: {application/json: {schema: {type: object, required: [user], properties: {user: {$ref: '#/components/schemas/User'}}}}}}
+    MobileAuth: {description: Mobile bearer session, headers: {Cache-Control: {description: no-store, schema: {type: string, enum: [no-store]}}}, content: {application/json: {schema: {type: object, required: [user, token, expires_at], properties: {user: {$ref: '#/components/schemas/User'}, token: {type: string, description: Opaque session token}, expires_at: {type: string, format: date-time}}}}}}
     Workflow: {description: Workflow, content: {application/json: {schema: {type: object, required: [workflow], properties: {workflow: {$ref: '#/components/schemas/Workflow'}}}}}}
     Run: {description: Run, content: {application/json: {schema: {type: object, required: [run], properties: {run: {$ref: '#/components/schemas/Run'}}}}}}
     Credential: {description: Credential metadata, content: {application/json: {schema: {type: object, required: [credential], properties: {credential: {$ref: '#/components/schemas/Credential'}}}}}}

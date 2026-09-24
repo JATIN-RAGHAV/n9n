@@ -18,6 +18,15 @@ func (s *Server) oauth(w http.ResponseWriter, r *http.Request, action string) {
 		fail(w, 405, "method not allowed")
 		return
 	}
+	if r.Header.Get("Authorization") != "" {
+		fail(w, 401, "browser session required for Gmail connection")
+		return
+	}
+	cookie, cookieErr := r.Cookie("n9n_session")
+	if cookieErr != nil {
+		fail(w, 401, "browser session required for Gmail connection")
+		return
+	}
 	uid := s.user(r)
 	if uid == "" {
 		fail(w, 401, "authentication required")
@@ -30,7 +39,6 @@ func (s *Server) oauth(w http.ResponseWriter, r *http.Request, action string) {
 		fail(w, 503, "Gmail connection not configured")
 		return
 	}
-	cookie, _ := r.Cookie("n9n_session")
 	sessionHash := sha256.Sum256([]byte(cookie.Value))
 	sessionKey := hex.EncodeToString(sessionHash[:])
 	switch action {
