@@ -1,3 +1,4 @@
+mod gmail;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
 use regex::Regex;
@@ -5,7 +6,7 @@ use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -19,6 +20,36 @@ use tokio::{
 };
 
 pub type Result<T> = std::result::Result<T, String>;
+
+pub fn health_touch(kind: &str) {
+    let dir = std::env::var("RUNNER_HEALTH_DIR").unwrap_or_else(|_| "/tmp/n9n-health".into());
+    let _ = std::fs::create_dir_all(&dir);
+    let temp = format!(
+        "{dir}/{kind}.{}.tmp",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|x| x.as_nanos())
+            .unwrap_or(0)
+    );
+    if std::fs::write(&temp, Utc::now().timestamp().to_string()).is_ok() {
+        let _ = std::fs::rename(&temp, format!("{dir}/{kind}"));
+    }
+}
+
+pub fn health_check() -> Result<()> {
+    let dir = std::env::var("RUNNER_HEALTH_DIR").unwrap_or_else(|_| "/tmp/n9n-health".into());
+    let now = Utc::now().timestamp();
+    for kind in ["jobs", "triggers"] {
+        let value = std::fs::read_to_string(format!("{dir}/{kind}")).map_err(|e| e.to_string())?;
+        let last: i64 = value
+            .parse()
+            .map_err(|e: std::num::ParseIntError| e.to_string())?;
+        if now - last > 35 || last > now + 5 {
+            return Err(format!("{kind} loop stale"));
+        }
+    }
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct Api {
@@ -76,6 +107,7 @@ impl Api {
         serde_json::from_value(value.get("job").cloned().unwrap_or(Value::Null))
             .map_err(|e| e.to_string())
     }
+    #[allow(clippy::too_many_arguments)]
     pub async fn step(
         &self,
         job: &Job,
@@ -153,22 +185,70 @@ pub struct Job {
 }
 
 pub fn render(template: &Value, input: &Value, outputs: &HashMap<String, Value>) -> Result<Value> {
+    let mut remaining = 256 * 1024;
+    render_bounded(template, input, outputs, &mut remaining, 0)
+}
+fn render_bounded(
+    template: &Value,
+    input: &Value,
+    outputs: &HashMap<String, Value>,
+    remaining: &mut usize,
+    depth: usize,
+) -> Result<Value> {
+    if depth > 32 {
+        return Err("mapping exceeds maximum nesting depth".into());
+    }
     match template {
-        Value::String(s) => render_string(s, input, outputs),
-        Value::Array(a) => Ok(Value::Array(
-            a.iter()
-                .map(|v| render(v, input, outputs))
-                .collect::<Result<Vec<_>>>()?,
-        )),
+        Value::String(s) => {
+            let value = render_string(s, input, outputs)?;
+            charge(
+                remaining,
+                serde_json::to_vec(&value).map_err(|e| e.to_string())?.len(),
+            )?;
+            Ok(value)
+        }
+        Value::Array(a) => {
+            charge(remaining, 2 + a.len())?;
+            let mut out = Vec::with_capacity(a.len().min(1024));
+            for value in a {
+                out.push(render_bounded(value, input, outputs, remaining, depth + 1)?)
+            }
+            Ok(Value::Array(out))
+        }
         Value::Object(o) => {
+            charge(remaining, 2 + o.len())?;
             let mut m = Map::new();
             for (k, v) in o {
-                m.insert(k.clone(), render(v, input, outputs)?);
+                charge(remaining, k.len() + 2)?;
+                m.insert(
+                    k.clone(),
+                    render_bounded(v, input, outputs, remaining, depth + 1)?,
+                );
             }
             Ok(Value::Object(m))
         }
-        v => Ok(v.clone()),
+        v => {
+            charge(
+                remaining,
+                serde_json::to_vec(v).map_err(|e| e.to_string())?.len(),
+            )?;
+            Ok(v.clone())
+        }
     }
+}
+fn charge(remaining: &mut usize, bytes: usize) -> Result<()> {
+    if bytes > *remaining {
+        return Err("rendered node configuration exceeds 256 KiB".into());
+    };
+    *remaining -= bytes;
+    Ok(())
+}
+fn append_limited(out: &mut String, piece: &str) -> Result<()> {
+    if piece.len() > 256 * 1024 - out.len().min(256 * 1024) {
+        return Err("rendered node configuration exceeds 256 KiB".into());
+    }
+    out.push_str(piece);
+    Ok(())
 }
 fn render_string(s: &str, input: &Value, outputs: &HashMap<String, Value>) -> Result<Value> {
     let re = Regex::new(r"\{\{\s*(input|nodes)\.([A-Za-z0-9_-]+)(?:\.([A-Za-z0-9_.-]+))?\s*\}\}")
@@ -208,27 +288,32 @@ fn render_string(s: &str, input: &Value, outputs: &HashMap<String, Value>) -> Re
     let mut last = 0;
     for c in captures {
         let m = c.get(0).unwrap();
-        out.push_str(&s[last..m.start()]);
+        append_limited(&mut out, &s[last..m.start()])?;
         let value = resolve(&c)?;
-        out.push_str(match &value {
-            Value::String(v) => v,
-            _ => {
-                let encoded = value.to_string();
-                out.push_str(&encoded);
-                last = m.end();
-                continue;
-            }
-        });
+        let encoded = match &value {
+            Value::String(v) => v.clone(),
+            _ => value.to_string(),
+        };
+        append_limited(&mut out, &encoded)?;
         last = m.end()
     }
-    out.push_str(&s[last..]);
+    append_limited(&mut out, &s[last..])?;
     Ok(Value::String(out))
 }
 
 pub fn condition(config: &Value, input: &Value, outputs: &HashMap<String, Value>) -> Result<bool> {
-    let left = render(&config["left"], input, outputs)?;
-    let right = render(&config["right"], input, outputs)?;
-    match config["operator"].as_str().unwrap_or("") {
+    let operator = config["operator"].as_str().unwrap_or("");
+    let left = match render(&config["left"], input, outputs) {
+        Ok(value) => value,
+        Err(_) if operator == "exists" => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let right = if operator == "exists" {
+        Value::Null
+    } else {
+        render(&config["right"], input, outputs)?
+    };
+    match operator {
         "equals" => Ok(left == right),
         "contains" => Ok(match (&left, &right) {
             (Value::String(a), Value::String(b)) => a.contains(b),
@@ -269,13 +354,20 @@ pub fn is_public_ip(ip: IpAddr) -> bool {
                 || o[0] == 203 && o[1] == 0 && o[2] == 113)
         }
         IpAddr::V6(a) => {
+            let first = a.segments()[0];
             !(a.is_loopback()
                 || a.is_unspecified()
                 || a.is_multicast()
                 || a.is_unique_local()
                 || a.is_unicast_link_local()
                 || a.to_ipv4_mapped().is_some()
-                || a.segments()[0] & 0xffc0 == 0xfe80)
+                || first & 0xffc0 == 0xfe80
+                || first == 0x2001 && a.segments()[1] == 0x0db8
+                || first == 0x0064 && a.segments()[1] == 0xff9b
+                || first == 0
+                    && a.segments()[1] == 0
+                    && a.segments()[2] == 0
+                    && a.segments()[3] == 0)
         }
     }
 }
@@ -299,6 +391,7 @@ pub async fn safe_http_client(url: &Url, allow_private: bool) -> Result<Client> 
         return Err("private or reserved HTTP address blocked".into());
     };
     Client::builder()
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(15))
         .resolve_to_addrs(host, &addresses)
@@ -324,7 +417,12 @@ pub async fn http_node(
     let method = Method::from_bytes(string_config(&rendered, "method")?.as_bytes())
         .map_err(|e| e.to_string())?;
     let safe = matches!(method, Method::GET | Method::HEAD);
-    let idem = rendered["idempotency_key"].as_str();
+    let idem = match rendered.get("idempotency_key") {
+        None => None,
+        Some(Value::String(value)) if !value.is_empty() => Some(value.as_str()),
+        Some(_) => return Err("idempotency_key must render to a nonempty string".into()),
+    };
+    let ambiguous = !safe && idem.is_none();
     let mut tries = 0;
     loop {
         tries += 1;
@@ -338,9 +436,16 @@ pub async fn http_node(
         if let Some(key) = idem {
             req = req.header("Idempotency-Key", key)
         };
-        if !rendered["body"].is_null() {
-            req = req.json(&rendered["body"])
-        };
+        match &rendered["body"] {
+            Value::Null => {}
+            Value::String(s) if s.is_empty() => {}
+            Value::String(s) => {
+                req = req.body(s.clone());
+            }
+            value => {
+                req = req.json(value);
+            }
+        }
         match req.send().await {
             Ok(mut res) => {
                 let status = res.status();
@@ -357,11 +462,28 @@ pub async fn http_node(
                 loop {
                     let chunk = timeout(Duration::from_secs(10), res.chunk())
                         .await
-                        .map_err(|_| "HTTP response timeout".to_string())?
-                        .map_err(|e| e.to_string())?;
+                        .map_err(|_| {
+                            if ambiguous {
+                                "uncertain: HTTP response timeout".to_string()
+                            } else {
+                                "HTTP response timeout".to_string()
+                            }
+                        })?
+                        .map_err(|e| {
+                            if ambiguous {
+                                format!("uncertain: HTTP response read failed: {e}")
+                            } else {
+                                e.to_string()
+                            }
+                        })?;
                     let Some(chunk) = chunk else { break };
-                    if bytes.len() + chunk.len() > 2 << 20 {
-                        return Err("HTTP response too large".into());
+                    if bytes.len() + chunk.len() > 256 << 10 {
+                        return Err(if ambiguous {
+                            "uncertain: HTTP response too large"
+                        } else {
+                            "HTTP response too large"
+                        }
+                        .into());
                     }
                     bytes.extend_from_slice(&chunk);
                 }
@@ -371,7 +493,12 @@ pub async fn http_node(
                 };
                 if !status.is_success() {
                     return Err(format!(
-                        "HTTP {}: {}",
+                        "{}HTTP {}: {}",
+                        if ambiguous && status.is_server_error() {
+                            "uncertain: "
+                        } else {
+                            ""
+                        },
                         status,
                         String::from_utf8_lossy(&bytes)
                     ));
@@ -385,7 +512,10 @@ pub async fn http_node(
                     sleep(Duration::from_millis(250 * tries)).await;
                     continue;
                 };
-                return Err(format!("HTTP request failed: {e}"));
+                return Err(format!(
+                    "{}HTTP request failed: {e}",
+                    if ambiguous { "uncertain: " } else { "" }
+                ));
             }
         }
     }
@@ -413,6 +543,7 @@ pub async fn execute(api: &Api, job: Job, allow_private: bool) -> Result<()> {
                 heartbeat_alive.store(false, Ordering::SeqCst);
                 break;
             }
+            health_touch("jobs");
         }
     });
     let result = execute_inner(api, &job, allow_private, &alive).await;
@@ -519,6 +650,17 @@ async fn execute_inner(
             let action = run_node(api, job, node, &input, &outputs, allow_private).await;
             match action {
                 Ok((o, b)) => {
+                    let output_len = serde_json::to_vec(&o)
+                        .map_err(|error| error.to_string())?
+                        .len();
+                    if output_len > 256 * 1024 {
+                        return Err(if is_unsafe(&node.kind, &node.config) {
+                            "uncertain: action output exceeded 256 KiB"
+                        } else {
+                            "action output exceeded 256 KiB"
+                        }
+                        .into());
+                    }
                     output = o;
                     branch = b;
                     outputs.insert(node_id.clone(), output.clone());
@@ -532,23 +674,30 @@ async fn execute_inner(
                         &branch,
                         attempt,
                     )
-                    .await?
+                    .await
+                    .map_err(|error| if is_unsafe(&node.kind, &node.config) { format!("uncertain: action succeeded but step could not be recorded: {error}") } else { error })?
                 }
                 Err(e) => {
-                    api.step(
-                        job,
-                        &node_id,
-                        "failed",
-                        input.clone(),
-                        Value::Null,
-                        &e,
-                        "",
-                        attempt,
-                    )
-                    .await?;
-                    if is_unsafe(&node.kind, &node.config) && e.contains("request failed") {
-                        return Err(format!("uncertain: {e}"));
-                    };
+                    let report = api
+                        .step(
+                            job,
+                            &node_id,
+                            "failed",
+                            input.clone(),
+                            Value::Null,
+                            &e,
+                            "",
+                            attempt,
+                        )
+                        .await;
+                    if let Err(report_error) = report {
+                        if e.starts_with("uncertain:") {
+                            return Err(e);
+                        }
+                        return Err(format!(
+                            "step failure could not be recorded: {report_error}; action: {e}"
+                        ));
+                    }
                     return Err(e);
                 }
             }
@@ -568,7 +717,8 @@ fn is_unsafe(kind: &str, config: &Value) -> bool {
     };
     if kind == "http_request" {
         let method = config["method"].as_str().unwrap_or("GET");
-        return !matches!(method, "GET" | "HEAD") && config["idempotency_key"].as_str().is_none();
+        return !matches!(method.to_ascii_uppercase().as_str(), "GET" | "HEAD")
+            && config["idempotency_key"].as_str().is_none_or(str::is_empty);
     };
     false
 }
@@ -658,22 +808,41 @@ pub async fn gmail_send(client: &Client, cred: &Value, config: &Value) -> Result
         .json(&json!({"raw":URL_SAFE_NO_PAD.encode(raw)}))
         .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))?;
+        .map_err(|e| format!("uncertain: Gmail send request failed: {e}"))?;
     if !res.status().is_success() {
-        return Err(format!("Gmail send HTTP {}", res.status()));
+        return Err(format!(
+            "{}Gmail send HTTP {}",
+            if res.status().is_server_error() {
+                "uncertain: "
+            } else {
+                ""
+            },
+            res.status()
+        ));
     };
-    res.json().await.map_err(|e| e.to_string())
+    res.json()
+        .await
+        .map_err(|e| format!("uncertain: Gmail send response read failed: {e}"))
 }
 
 pub async fn poll_triggers(api: &Api) -> Result<()> {
     let value = api.get("/internal/triggers", None).await?;
+    health_touch("triggers");
     let triggers = value["triggers"].as_array().ok_or("triggers missing")?;
+    let mut first_error = None;
     for t in triggers {
         if let Err(e) = poll_trigger(api, t).await {
-            eprintln!("trigger {}: {e}", t["workflow_id"])
+            eprintln!("trigger {}: {e}", t["workflow_id"]);
+            if first_error.is_none() {
+                first_error = Some(e);
+            }
         }
     }
-    Ok(())
+    if let Some(error) = first_error {
+        Err(error)
+    } else {
+        Ok(())
+    }
 }
 async fn poll_trigger(api: &Api, t: &Value) -> Result<()> {
     let wid = string_config(t, "workflow_id")?;
@@ -704,126 +873,10 @@ async fn poll_trigger(api: &Api, t: &Value) -> Result<()> {
             }
             Ok(())
         }
-        "email_trigger" => poll_email(api, wid, version, node, checkpoint).await,
+        "email_trigger" => gmail::poll_email(api, wid, version, node, checkpoint).await,
         _ => Ok(()),
     }
 }
-async fn poll_email(
-    api: &Api,
-    wid: &str,
-    version: i64,
-    node: &Value,
-    checkpoint: &Value,
-) -> Result<()> {
-    let cred_id = string_config(node, "credential_id")?;
-    let poll_seconds = node["config"]["poll_seconds"]
-        .as_i64()
-        .unwrap_or(60)
-        .max(30);
-    let poll_start = Utc::now().timestamp();
-    let last = checkpoint["last_poll_at"].as_i64();
-    if last.is_none() {
-        api.post(
-            &format!("/internal/triggers/{wid}/checkpoint"),
-            json!({"version":version,"checkpoint":{"last_poll_at":poll_start}}),
-        )
-        .await?;
-        return Ok(());
-    };
-    if poll_start - last.unwrap() < poll_seconds {
-        return Ok(());
-    };
-    let cred_response = api
-        .get(
-            &format!("/internal/triggers/{wid}/credentials/{cred_id}?version={version}"),
-            None,
-        )
-        .await?;
-    let cred = &cred_response["credential"]["data"];
-    let token = gmail_token(&api.client, cred).await?;
-    let base =
-        std::env::var("GMAIL_API_BASE").unwrap_or_else(|_| "https://gmail.googleapis.com".into());
-    let base = base.trim_end_matches('/');
-    let query = node["config"]["query"].as_str().unwrap_or("in:inbox");
-    let since = (last.unwrap() - 60).max(0);
-    let mut page = String::new();
-    let mut ids = Vec::new();
-    loop {
-        let mut u =
-            Url::parse(&format!("{base}/gmail/v1/users/me/messages")).map_err(|e| e.to_string())?;
-        u.query_pairs_mut()
-            .append_pair("maxResults", "100")
-            .append_pair("q", &format!("{query} after:{since}"));
-        if !page.is_empty() {
-            u.query_pairs_mut().append_pair("pageToken", &page);
-        };
-        let res = api
-            .client
-            .get(u)
-            .bearer_auth(&token)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !res.status().is_success() {
-            return Err(format!("Gmail list HTTP {}", res.status()));
-        };
-        let v: Value = res.json().await.map_err(|e| e.to_string())?;
-        if let Some(messages) = v["messages"].as_array() {
-            for m in messages {
-                if let Some(id) = m["id"].as_str() {
-                    ids.push(id.to_string())
-                }
-            }
-        };
-        page = v["nextPageToken"].as_str().unwrap_or("").to_string();
-        if page.is_empty() {
-            break;
-        };
-        if ids.len() > 10_000 {
-            return Err("Gmail backlog exceeds 10,000 messages; narrow query".into());
-        }
-    }
-    ids.reverse();
-    let mut seen = HashSet::new();
-    for message_id in ids {
-        if !seen.insert(message_id.clone()) {
-            continue;
-        };
-        let url = format!("{base}/gmail/v1/users/me/messages/{message_id}?format=full");
-        let res = api
-            .client
-            .get(url)
-            .bearer_auth(&token)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !res.status().is_success() {
-            return Err(format!("Gmail message HTTP {}", res.status()));
-        };
-        let message: Value = res.json().await.map_err(|e| e.to_string())?;
-        let mut headers = Map::new();
-        if let Some(items) = message["payload"]["headers"].as_array() {
-            for header in items {
-                if let (Some(k), Some(v)) = (header["name"].as_str(), header["value"].as_str()) {
-                    headers.insert(k.to_ascii_lowercase(), Value::String(v.into()));
-                }
-            }
-        };
-        let input = json!({"id":message_id,"thread_id":message["threadId"],"snippet":message["snippet"],"headers":headers,"message":message});
-        api.post(
-            &format!("/internal/triggers/{wid}/events"),
-            json!({"version":version,"event_id":format!("gmail:{message_id}"),"input":input}),
-        )
-        .await?;
-    }
-    api.post(
-        &format!("/internal/triggers/{wid}/checkpoint"),
-        json!({"version":version,"checkpoint":{"last_poll_at":poll_start}}),
-    )
-    .await?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -869,6 +922,12 @@ mod tests {
             &Value::Null,
             &outputs
         )
+        .unwrap());
+        assert!(!condition(
+            &json!({"left":"{{input.absent}}","operator":"exists"}),
+            &json!({}),
+            &outputs
+        )
         .unwrap())
     }
     #[test]
@@ -880,6 +939,8 @@ mod tests {
             "::1",
             "fc00::1",
             "::ffff:127.0.0.1",
+            "2001:db8::1",
+            "64:ff9b::a00:1",
         ] {
             assert!(!is_public_ip(ip.parse().unwrap()), "{ip}")
         }
@@ -893,6 +954,32 @@ mod tests {
             "http_request",
             &json!({"method":"POST","idempotency_key":"abc"})
         ));
-        assert!(!is_unsafe("http_request", &json!({"method":"GET"})))
+        assert!(!is_unsafe("http_request", &json!({"method":"GET"})));
+        assert!(is_unsafe(
+            "http_request",
+            &json!({"method":"post","idempotency_key":""})
+        ))
+    }
+    #[test]
+    fn render_limits_expansion_and_depth() {
+        let big = "x".repeat(300_000);
+        assert!(render(
+            &json!("{{input.big}}"),
+            &json!({"big":big}),
+            &HashMap::new()
+        )
+        .is_err());
+        let mut deep = json!(1);
+        for _ in 0..34 {
+            deep = json!([deep]);
+        }
+        assert!(render(&deep, &Value::Null, &HashMap::new()).is_err());
+        let repeated = "{{input.big}}".repeat(1000);
+        assert!(render(
+            &json!(repeated),
+            &json!({"big":"z".repeat(1024)}),
+            &HashMap::new()
+        )
+        .is_err());
     }
 }
