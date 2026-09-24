@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "n9n",
+    "slug": "n9n-mobile",
+    "scheme": "n9n",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": { "bundleIdentifier": "com.n9n.app", "supportsTablet": true },
+    "android": { "package": "com.n9n.app" },
+    "plugins": ["expo-secure-store"]
+  }
+}

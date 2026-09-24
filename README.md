@@ -43,7 +43,10 @@ See [database migration](docs/database.md) for moving legacy SQLite data and [te
 ## Development and architecture
 
 - [Flutter web app](web/README.md)
+- [Android and iOS app](mobile/README.md)
 - [HTTP API contract](contracts/README.md)
 - [Architecture and operations](docs/architecture.md)
 
 The release web build uses `flutter build web --wasm`. Flutter supplies a JavaScript fallback on browsers without WasmGC support. The web server sends COOP and COEP headers to permit the renderer's threaded mode in capable browsers. Run `flutter analyze` and `flutter test` in `web/`, `go test ./...` in `backend/`, and `cargo test` in `runner/` for local checks.
+
+The React Native Android/iOS client lives in `mobile/`. It uses revocable bearer sessions stored in platform secure storage and the same Go API; see [mobile setup and builds](mobile/README.md).

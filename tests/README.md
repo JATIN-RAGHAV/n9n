@@ -7,3 +7,5 @@ Run `python3 tests/restart_smoke.py` to verify a queued run survives a backend r
 The browser smoke in `tests/browser` exercises the Flutter Wasm UI; see its README for setup.
 
 Backend integration tests use real PostgreSQL and isolated schemas. Run `make test-backend` for the local Compose database, or set `TEST_DATABASE_URL` explicitly; CI provisions its own PostgreSQL service.
+
+Run `python3 tests/mobile_api_smoke.py` against the running Compose stack to verify mobile register/login, bearer-only authentication, workflow publish/run, and server-side logout revocation. In `mobile/`, run `npm ci && npm run typecheck && npm test` for the native app's type and graph tests; Android/iOS JavaScript exports are checked in CI.
