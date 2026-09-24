@@ -11,7 +11,7 @@ type querier interface{ QueryRow(string, ...any) *sql.Row }
 func queueRun(db *sql.DB, wid string, version int, input any) (Run, error) {
 	id := id()
 	t := now()
-	_, e := db.Exec(`INSERT INTO runs(id,workflow_id,version,status,input,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, id, wid, version, "queued", jsonText(input), t, t)
+	_, e := db.Exec(`INSERT INTO runs(id,workflow_id,version,status,input,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, id, wid, version, "queued", jsonText(input), t, t)
 	if e != nil {
 		return Run{}, e
 	}
@@ -20,24 +20,24 @@ func queueRun(db *sql.DB, wid string, version int, input any) (Run, error) {
 func getRun(q querier, id string) (Run, error) {
 	var x Run
 	var input string
-	e := q.QueryRow(`SELECT id,workflow_id,version,status,input,error,created_at,updated_at FROM runs WHERE id=?`, id).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
+	e := q.QueryRow(`SELECT id,workflow_id,version,status,input,error,created_at,updated_at FROM runs WHERE id=$1`, id).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
 	_ = json.Unmarshal([]byte(input), &x.Input)
 	return x, e
 }
 func (s *Server) ownedRun(id, uid string) (Run, error) {
 	var x Run
 	var input string
-	e := s.db.QueryRow(`SELECT r.id,r.workflow_id,r.version,r.status,r.input,r.error,r.created_at,r.updated_at FROM runs r JOIN workflows w ON w.id=r.workflow_id WHERE r.id=? AND w.user_id=?`, id, uid).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
+	e := s.db.QueryRow(`SELECT r.id,r.workflow_id,r.version,r.status,r.input,r.error,r.created_at,r.updated_at FROM runs r JOIN workflows w ON w.id=r.workflow_id WHERE r.id=$1 AND w.user_id=$2`, id, uid).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
 	_ = json.Unmarshal([]byte(input), &x.Input)
 	return x, e
 }
 func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []string) {
 	if len(p) == 0 && r.Method == "GET" {
 		filter := r.URL.Query().Get("workflow_id")
-		q := `SELECT r.id FROM runs r JOIN workflows w ON w.id=r.workflow_id WHERE w.user_id=?`
+		q := `SELECT r.id FROM runs r JOIN workflows w ON w.id=r.workflow_id WHERE w.user_id=$1`
 		args := []any{uid}
 		if filter != "" {
-			q += ` AND w.id=?`
+			q += ` AND w.id=$2`
 			args = append(args, filter)
 		}
 		q += ` ORDER BY r.created_at DESC LIMIT 200`
@@ -74,7 +74,7 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []st
 		return
 	}
 	if len(p) == 1 && r.Method == "GET" {
-		rows, e := s.db.Query(`SELECT node_id,status,input,output,error,branch,attempt,created_at FROM steps WHERE run_id=? ORDER BY id`, x.ID)
+		rows, e := s.db.Query(`SELECT node_id,status,input,output,error,branch,attempt,created_at FROM steps WHERE run_id=$1 ORDER BY id`, x.ID)
 		if e != nil {
 			fail(w, 500, "database error")
 			return
@@ -95,7 +95,7 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []st
 	}
 	if len(p) == 2 && p[1] == "cancel" && r.Method == "POST" {
 		if x.Status == "queued" || x.Status == "running" {
-			_, e := s.db.Exec(`UPDATE runs SET status='cancelled',lease_token=NULL,lease_until=NULL,updated_at=? WHERE id=?`, now(), x.ID)
+			_, e := s.db.Exec(`UPDATE runs SET status='cancelled',lease_token=NULL,lease_until=NULL,updated_at=$1 WHERE id=$2 AND status IN ('queued','running')`, now(), x.ID)
 			if e != nil {
 				fail(w, 500, "database error")
 				return

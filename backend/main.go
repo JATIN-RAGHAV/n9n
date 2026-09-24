@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -89,16 +89,26 @@ var nodeTypes = map[string]bool{"manual_trigger": true, "webhook_trigger": true,
 var triggerTypes = map[string]bool{"manual_trigger": true, "webhook_trigger": true, "schedule_trigger": true, "email_trigger": true}
 
 func main() {
-	dbPath := env("DATABASE_PATH", "/data/n9n.db")
-	if err := os.MkdirAll(dir(dbPath), 0700); err != nil {
-		log.Fatal(err)
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		log.Fatal("DATABASE_URL must be set")
 	}
 	key := os.Getenv("ENCRYPTION_KEY")
 	token := os.Getenv("RUNNER_TOKEN")
 	if key == "" || token == "" {
 		log.Fatal("ENCRYPTION_KEY and RUNNER_TOKEN must be set")
 	}
-	s, err := NewServer(dbPath, key, token)
+	var s *Server
+	var err error
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		s, err = NewServer(dbURL, key, token)
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+		log.Printf("database not ready: %v", err)
+		time.Sleep(time.Second)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -130,17 +140,7 @@ func env(k, d string) string {
 	}
 	return d
 }
-func dir(p string) string {
-	i := strings.LastIndex(p, "/")
-	if i < 0 {
-		return "."
-	}
-	if i == 0 {
-		return "/"
-	}
-	return p[:i]
-}
-func NewServer(path, key, token string) (*Server, error) {
+func NewServer(databaseURL, key, token string) (*Server, error) {
 	if len(key) != 64 || len(token) < 32 {
 		return nil, errors.New("ENCRYPTION_KEY must be 64 hex characters and RUNNER_TOKEN at least 32 characters")
 	}
@@ -148,11 +148,20 @@ func NewServer(path, key, token string) (*Server, error) {
 	if e != nil {
 		return nil, e
 	}
-	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on")
+	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(20)
+	db.SetMaxIdleConns(10)
+	db.SetConnMaxLifetime(time.Hour)
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err = db.PingContext(pingCtx)
+	pingCancel()
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
 	s := &Server{db: db, runnerToken: token, secure: os.Getenv("COOKIE_SECURE") == "true", authWindows: map[string]authWindow{}, authSlots: make(chan struct{}, 4)}
 	copy(s.key[:], keyBytes)
 	if err = migrate(db); err != nil {
@@ -163,13 +172,21 @@ func NewServer(path, key, token string) (*Server, error) {
 }
 
 func migrate(db *sql.DB) error {
-	tx, err := db.Begin()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(917442621)`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+		return err
+	}
 	var version int
-	if err = tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+	if err = tx.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil {
 		return err
 	}
 	if version > 1 {
@@ -181,7 +198,7 @@ func migrate(db *sql.DB) error {
 				return err
 			}
 		}
-		if _, err = tx.Exec(`PRAGMA user_version = 1`); err != nil {
+		if _, err = tx.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(1,$1)`, now()); err != nil {
 			return err
 		}
 	}
@@ -203,10 +220,10 @@ func (s *Server) maintain(ctx context.Context) {
 }
 func (s *Server) cleanup() {
 	cutoff := now()
-	if _, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at<?`, cutoff); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at<$1`, cutoff); err != nil {
 		log.Printf("session cleanup: %v", err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM oauth_states WHERE expires_at<?`, cutoff); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM oauth_states WHERE expires_at<$1`, cutoff); err != nil {
 		log.Printf("OAuth state cleanup: %v", err)
 	}
 	days, err := strconv.Atoi(env("RUN_RETENTION_DAYS", "30"))
@@ -214,22 +231,22 @@ func (s *Server) cleanup() {
 		days = 30
 	}
 	before := time.Now().UTC().AddDate(0, 0, -days).Format(timeLayout)
-	if _, err := s.db.Exec(`DELETE FROM runs WHERE status IN ('succeeded','failed','cancelled','uncertain') AND updated_at<?`, before); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM runs WHERE status IN ('succeeded','failed','cancelled','uncertain') AND updated_at<$1`, before); err != nil {
 		log.Printf("run cleanup: %v", err)
 	}
 }
 
 var schema = []string{
-	`CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash BLOB NOT NULL,created_at TEXT NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash BYTEA NOT NULL,created_at TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,expires_at TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS workflows(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,name TEXT NOT NULL,draft TEXT NOT NULL,published_version INTEGER,active INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS versions(workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,version INTEGER NOT NULL,graph TEXT NOT NULL,PRIMARY KEY(workflow_id,version))`,
+	`CREATE TABLE IF NOT EXISTS workflows(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,name TEXT NOT NULL,draft JSONB NOT NULL,published_version INTEGER,active BOOLEAN NOT NULL DEFAULT FALSE,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS versions(workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,version INTEGER NOT NULL,graph JSONB NOT NULL,PRIMARY KEY(workflow_id,version))`,
 	`CREATE TABLE IF NOT EXISTS credentials(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,name TEXT NOT NULL,kind TEXT NOT NULL,ciphertext TEXT NOT NULL,created_at TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,version INTEGER NOT NULL,status TEXT NOT NULL,input TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',lease_token TEXT,lease_until TEXT,runner_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,version INTEGER NOT NULL,status TEXT NOT NULL,input JSONB NOT NULL,error TEXT NOT NULL DEFAULT '',lease_token TEXT,lease_until TEXT,runner_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,FOREIGN KEY(workflow_id,version) REFERENCES versions(workflow_id,version))`,
 	`CREATE INDEX IF NOT EXISTS runs_queue ON runs(status,created_at)`,
-	`CREATE TABLE IF NOT EXISTS steps(id INTEGER PRIMARY KEY AUTOINCREMENT,run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,node_id TEXT NOT NULL,status TEXT NOT NULL,input TEXT NOT NULL,output TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',branch TEXT NOT NULL DEFAULT '',attempt INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS trigger_events(workflow_id TEXT NOT NULL,version INTEGER NOT NULL,event_id TEXT NOT NULL,run_id TEXT NOT NULL,PRIMARY KEY(workflow_id,version,event_id))`,
-	`CREATE TABLE IF NOT EXISTS checkpoints(workflow_id TEXT NOT NULL,version INTEGER NOT NULL,value TEXT NOT NULL,PRIMARY KEY(workflow_id,version))`,
+	`CREATE TABLE IF NOT EXISTS steps(id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,node_id TEXT NOT NULL,status TEXT NOT NULL,input JSONB NOT NULL,output JSONB NOT NULL,error TEXT NOT NULL DEFAULT '',branch TEXT NOT NULL DEFAULT '',attempt INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS trigger_events(workflow_id TEXT NOT NULL,version INTEGER NOT NULL,event_id TEXT NOT NULL,run_id TEXT NOT NULL,PRIMARY KEY(workflow_id,version,event_id),FOREIGN KEY(workflow_id,version) REFERENCES versions(workflow_id,version) ON DELETE CASCADE)`,
+	`CREATE TABLE IF NOT EXISTS checkpoints(workflow_id TEXT NOT NULL,version INTEGER NOT NULL,value JSONB NOT NULL,PRIMARY KEY(workflow_id,version),FOREIGN KEY(workflow_id,version) REFERENCES versions(workflow_id,version) ON DELETE CASCADE)`,
 	`CREATE TABLE IF NOT EXISTS oauth_states(state_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,session_hash TEXT NOT NULL,expires_at TEXT NOT NULL)`,
 }
 
@@ -361,14 +378,14 @@ func (s *Server) user(r *http.Request) string {
 	}
 	h := sha256.Sum256([]byte(c.Value))
 	var uid string
-	_ = s.db.QueryRow(`SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?`, hex.EncodeToString(h[:]), now()).Scan(&uid)
+	_ = s.db.QueryRow(`SELECT user_id FROM sessions WHERE token_hash=$1 AND expires_at>$2`, hex.EncodeToString(h[:]), now()).Scan(&uid)
 	return uid
 }
 func (s *Server) session(w http.ResponseWriter, uid string) error {
 	t := id() + id()
 	h := sha256.Sum256([]byte(t))
 	expiry := time.Now().UTC().Add(30 * 24 * time.Hour)
-	_, err := s.db.Exec(`INSERT INTO sessions VALUES(?,?,?)`, hex.EncodeToString(h[:]), uid, expiry.Format(timeLayout))
+	_, err := s.db.Exec(`INSERT INTO sessions VALUES($1,$2,$3)`, hex.EncodeToString(h[:]), uid, expiry.Format(timeLayout))
 	if err != nil {
 		return err
 	}
@@ -383,14 +400,14 @@ func (s *Server) auth(w http.ResponseWriter, r *http.Request, action string) {
 			return
 		}
 		var email string
-		_ = s.db.QueryRow(`SELECT email FROM users WHERE id=?`, uid).Scan(&email)
+		_ = s.db.QueryRow(`SELECT email FROM users WHERE id=$1`, uid).Scan(&email)
 		write(w, 200, map[string]any{"user": map[string]string{"id": uid, "email": email}})
 		return
 	}
 	if action == "logout" && r.Method == "POST" {
 		if c, e := r.Cookie("n9n_session"); e == nil {
 			h := sha256.Sum256([]byte(c.Value))
-			_, _ = s.db.Exec(`DELETE FROM sessions WHERE token_hash=?`, hex.EncodeToString(h[:]))
+			_, _ = s.db.Exec(`DELETE FROM sessions WHERE token_hash=$1`, hex.EncodeToString(h[:]))
 		}
 		http.SetCookie(w, &http.Cookie{Name: "n9n_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secure})
 		write(w, 200, map[string]bool{"ok": true})
@@ -432,14 +449,14 @@ func (s *Server) auth(w http.ResponseWriter, r *http.Request, action string) {
 			return
 		}
 		uid = id()
-		_, e = s.db.Exec(`INSERT INTO users VALUES(?,?,?,?)`, uid, a.Email, hash, now())
+		_, e = s.db.Exec(`INSERT INTO users VALUES($1,$2,$3,$4)`, uid, a.Email, hash, now())
 		if e != nil {
 			fail(w, 409, "email already registered")
 			return
 		}
 	} else {
 		var hash []byte
-		e := s.db.QueryRow(`SELECT id,password_hash FROM users WHERE email=?`, a.Email).Scan(&uid, &hash)
+		e := s.db.QueryRow(`SELECT id,password_hash FROM users WHERE email=$1`, a.Email).Scan(&uid, &hash)
 		if e != nil || bcrypt.CompareHashAndPassword(hash, []byte(a.Password)) != nil {
 			fail(w, 401, "invalid credentials")
 			return

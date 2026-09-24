@@ -1,18 +1,14 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 func registered(t *testing.T, s *Server, email string) *http.Cookie {
@@ -22,31 +18,21 @@ func registered(t *testing.T, s *Server, email string) *http.Cookie {
 	return cookie
 }
 
-func TestLegacySchemaMigrationAndRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy.db")
-	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range schema {
-		if _, err := db.Exec(statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := db.Exec(`INSERT INTO users VALUES('legacy-user','legacy@example.com','hash','2025-01-01')`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+func TestSchemaMigrationAndRestart(t *testing.T) {
+	path := testDatabaseURL(t)
 	for i := 0; i < 2; i++ {
 		s, err := NewServer(path, testKey, testToken)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var version int
-		if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 1 {
+		if err := s.db.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil || version != 1 {
 			t.Fatalf("migration version=%d err=%v", version, err)
+		}
+		if i == 0 {
+			if _, err := s.db.Exec(`INSERT INTO users VALUES('legacy-user','legacy@example.com',$1,'2025-01-01')`, []byte("hash")); err != nil {
+				t.Fatal(err)
+			}
 		}
 		var email string
 		if err := s.db.QueryRow(`SELECT email FROM users WHERE id='legacy-user'`).Scan(&email); err != nil || email != "legacy@example.com" {
@@ -82,15 +68,15 @@ func TestRetentionPreservesEventTombstone(t *testing.T) {
 	requireOK(t, status, value)
 	rid := value["run"].(map[string]any)["id"].(string)
 	old := time.Now().UTC().AddDate(0, 0, -2).Format(timeLayout)
-	if _, err := s.db.Exec(`UPDATE runs SET status='succeeded',updated_at=? WHERE id=?`, old, rid); err != nil {
+	if _, err := s.db.Exec(`UPDATE runs SET status='succeeded',updated_at=$1 WHERE id=$2`, old, rid); err != nil {
 		t.Fatal(err)
 	}
 	s.cleanup()
 	var count int
-	if err := s.db.QueryRow(`SELECT count(*) FROM runs WHERE id=?`, rid).Scan(&count); err != nil || count != 0 {
+	if err := s.db.QueryRow(`SELECT count(*) FROM runs WHERE id=$1`, rid).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("old run retained: %d %v", count, err)
 	}
-	if err := s.db.QueryRow(`SELECT count(*) FROM trigger_events WHERE workflow_id=? AND event_id='same-event'`, wid).Scan(&count); err != nil || count != 1 {
+	if err := s.db.QueryRow(`SELECT count(*) FROM trigger_events WHERE workflow_id=$1 AND event_id='same-event'`, wid).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("dedupe tombstone lost: %d %v", count, err)
 	}
 	status, value = call()
@@ -141,7 +127,7 @@ func TestVersionImmutabilityAndForeignCredential(t *testing.T) {
 	status, value, _ = request(t, s, a, "POST", "/api/workflows/"+wid+"/publish", map[string]any{}, false)
 	requireOK(t, status, value)
 	var previous string
-	if err := s.db.QueryRow(`SELECT graph FROM versions WHERE workflow_id=? AND version=1`, wid).Scan(&previous); err != nil {
+	if err := s.db.QueryRow(`SELECT graph FROM versions WHERE workflow_id=$1 AND version=1`, wid).Scan(&previous); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(previous, `"one"`) || strings.Contains(previous, `"two"`) {
@@ -282,7 +268,7 @@ func TestLeaseRecoveryPreservesStepsAndFencesOldToken(t *testing.T) {
 	requireOK(t, status, value)
 	status, value, _ = request(t, s, nil, "POST", "/internal/jobs/"+rid+"/steps", map[string]any{"lease_token": lease, "node_id": "set", "status": "running", "input": map[string]any{"name": "Ada"}, "output": nil, "attempt": 1}, true)
 	requireOK(t, status, value)
-	if _, err := s.db.Exec(`UPDATE runs SET lease_until='2000-01-01T00:00:00.000000000Z' WHERE id=?`, rid); err != nil {
+	if _, err := s.db.Exec(`UPDATE runs SET lease_until='2000-01-01T00:00:00.000000000Z' WHERE id=$1`, rid); err != nil {
 		t.Fatal(err)
 	}
 	status, value, _ = request(t, s, nil, "POST", "/internal/jobs/claim", map[string]any{"runner_id": "two"}, true)
@@ -311,7 +297,7 @@ func TestExpiredSideEffectBecomesUncertain(t *testing.T) {
 	lease := value["job"].(map[string]any)["lease_token"].(string)
 	status, value, _ = request(t, s, nil, "POST", "/internal/jobs/"+rid+"/steps", map[string]any{"lease_token": lease, "node_id": "post", "status": "running", "input": map[string]any{}, "output": nil, "attempt": 1}, true)
 	requireOK(t, status, value)
-	if _, err := s.db.Exec(`UPDATE runs SET lease_until='2000-01-01T00:00:00.000000000Z' WHERE id=?`, rid); err != nil {
+	if _, err := s.db.Exec(`UPDATE runs SET lease_until='2000-01-01T00:00:00.000000000Z' WHERE id=$1`, rid); err != nil {
 		t.Fatal(err)
 	}
 	status, value, _ = request(t, s, nil, "POST", "/internal/jobs/claim", map[string]any{"runner_id": "two"}, true)

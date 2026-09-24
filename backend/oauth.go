@@ -37,7 +37,7 @@ func (s *Server) oauth(w http.ResponseWriter, r *http.Request, action string) {
 	case "start":
 		state := id() + id()
 		h := sha256.Sum256([]byte(state))
-		_, e := s.db.Exec(`INSERT INTO oauth_states VALUES(?,?,?,?)`, hex.EncodeToString(h[:]), uid, sessionKey, time.Now().UTC().Add(10*time.Minute).Format(timeLayout))
+		_, e := s.db.Exec(`INSERT INTO oauth_states VALUES($1,$2,$3,$4)`, hex.EncodeToString(h[:]), uid, sessionKey, time.Now().UTC().Add(10*time.Minute).Format(timeLayout))
 		if e != nil {
 			fail(w, 500, "database error")
 			return
@@ -74,13 +74,13 @@ func (s *Server) oauth(w http.ResponseWriter, r *http.Request, action string) {
 			return
 		}
 		var owner, storedSession, expires string
-		e = tx.QueryRow(`SELECT user_id,session_hash,expires_at FROM oauth_states WHERE state_hash=?`, stateKey).Scan(&owner, &storedSession, &expires)
+		e = tx.QueryRow(`SELECT user_id,session_hash,expires_at FROM oauth_states WHERE state_hash=$1 FOR UPDATE`, stateKey).Scan(&owner, &storedSession, &expires)
 		if e != nil || owner != uid || storedSession != sessionKey || expires < now() {
 			tx.Rollback()
 			http.Redirect(w, r, "/#/credentials?error=gmail", http.StatusFound)
 			return
 		}
-		_, e = tx.Exec(`DELETE FROM oauth_states WHERE state_hash=?`, stateKey)
+		_, e = tx.Exec(`DELETE FROM oauth_states WHERE state_hash=$1`, stateKey)
 		if e != nil {
 			tx.Rollback()
 			fail(w, 500, "database error")
@@ -123,7 +123,7 @@ func (s *Server) oauth(w http.ResponseWriter, r *http.Request, action string) {
 			fail(w, 500, "encryption error")
 			return
 		}
-		_, e = s.db.Exec(`INSERT INTO credentials VALUES(?,?,?,?,?,?)`, id(), uid, "Gmail", "gmail_oauth", ciphertext, now())
+		_, e = s.db.Exec(`INSERT INTO credentials VALUES($1,$2,$3,$4,$5,$6)`, id(), uid, "Gmail", "gmail_oauth", ciphertext, now())
 		if e != nil {
 			fail(w, 500, "database error")
 			return

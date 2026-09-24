@@ -18,8 +18,8 @@ func loadWorkflow(db *sql.DB, id, uid string) (Workflow, error) {
 	var w Workflow
 	var draft string
 	var version sql.NullInt64
-	var active int
-	err := db.QueryRow(`SELECT id,name,draft,published_version,active,created_at,updated_at FROM workflows WHERE id=? AND user_id=?`, id, uid).Scan(&w.ID, &w.Name, &draft, &version, &active, &w.CreatedAt, &w.UpdatedAt)
+	var active bool
+	err := db.QueryRow(`SELECT id,name,draft,published_version,active,created_at,updated_at FROM workflows WHERE id=$1 AND user_id=$2`, id, uid).Scan(&w.ID, &w.Name, &draft, &version, &active, &w.CreatedAt, &w.UpdatedAt)
 	if err != nil {
 		return w, err
 	}
@@ -34,14 +34,14 @@ func loadWorkflow(db *sql.DB, id, uid string) (Workflow, error) {
 		v := int(version.Int64)
 		w.PublishedVersion = &v
 	}
-	w.Active = active != 0
+	w.Active = active
 	return w, nil
 }
 func (s *Server) workflows(w http.ResponseWriter, r *http.Request, uid string, p []string) {
 	if len(p) == 0 {
 		switch r.Method {
 		case "GET":
-			rows, e := s.db.Query(`SELECT id FROM workflows WHERE user_id=? ORDER BY updated_at DESC`, uid)
+			rows, e := s.db.Query(`SELECT id FROM workflows WHERE user_id=$1 ORDER BY updated_at DESC`, uid)
 			if e != nil {
 				fail(w, 500, "database error")
 				return
@@ -90,7 +90,7 @@ func (s *Server) workflows(w http.ResponseWriter, r *http.Request, uid string, p
 			}
 			id := id()
 			t := now()
-			_, e := s.db.Exec(`INSERT INTO workflows(id,user_id,name,draft,created_at,updated_at) VALUES(?,?,?,?,?,?)`, id, uid, a.Name, jsonText(g), t, t)
+			_, e := s.db.Exec(`INSERT INTO workflows(id,user_id,name,draft,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6)`, id, uid, a.Name, jsonText(g), t, t)
 			if e != nil {
 				fail(w, 500, "database error")
 				return
@@ -132,7 +132,7 @@ func (s *Server) workflows(w http.ResponseWriter, r *http.Request, uid string, p
 				fail(w, 400, e.Error())
 				return
 			}
-			_, e := s.db.Exec(`UPDATE workflows SET name=?,draft=?,updated_at=? WHERE id=?`, a.Name, jsonText(a.Draft), now(), x.ID)
+			_, e := s.db.Exec(`UPDATE workflows SET name=$1,draft=$2,updated_at=$3 WHERE id=$4`, a.Name, jsonText(a.Draft), now(), x.ID)
 			if e != nil {
 				fail(w, 500, "database error")
 				return
@@ -141,7 +141,7 @@ func (s *Server) workflows(w http.ResponseWriter, r *http.Request, uid string, p
 			write(w, 200, map[string]any{"workflow": x})
 			return
 		case "DELETE":
-			_, e := s.db.Exec(`DELETE FROM workflows WHERE id=?`, x.ID)
+			_, e := s.db.Exec(`DELETE FROM workflows WHERE id=$1`, x.ID)
 			if e != nil {
 				fail(w, 500, "database error")
 				return
@@ -153,32 +153,42 @@ func (s *Server) workflows(w http.ResponseWriter, r *http.Request, uid string, p
 	if len(p) == 2 && r.Method == "POST" {
 		switch p[1] {
 		case "publish":
-			if e := validatePublish(x.Draft); e != nil {
-				fail(w, 400, e.Error())
-				return
-			}
-			for _, n := range x.Draft.Nodes {
-				if n.CredentialID != "" {
-					var count int
-					_ = s.db.QueryRow(`SELECT count(*) FROM credentials WHERE id=? AND user_id=?`, n.CredentialID, uid).Scan(&count)
-					if count == 0 {
-						fail(w, 400, "credential not found: "+n.CredentialID)
-						return
-					}
-				}
-			}
 			tx, e := s.db.Begin()
 			if e != nil {
 				fail(w, 500, "database error")
 				return
 			}
 			defer tx.Rollback()
-			v := 1
-			if x.PublishedVersion != nil {
-				v = *x.PublishedVersion + 1
+			var draft string
+			var current sql.NullInt64
+			if e = tx.QueryRow(`SELECT draft,published_version FROM workflows WHERE id=$1 AND user_id=$2 FOR UPDATE`, x.ID, uid).Scan(&draft, &current); e != nil {
+				fail(w, 404, "workflow not found")
+				return
 			}
-			if _, e = tx.Exec(`INSERT INTO versions VALUES(?,?,?)`, x.ID, v, jsonText(x.Draft)); e == nil {
-				_, e = tx.Exec(`UPDATE workflows SET published_version=?,updated_at=? WHERE id=?`, v, now(), x.ID)
+			if e = json.Unmarshal([]byte(draft), &x.Draft); e != nil {
+				fail(w, 500, "invalid stored workflow")
+				return
+			}
+			if e = validatePublish(x.Draft); e != nil {
+				fail(w, 400, e.Error())
+				return
+			}
+			for _, n := range x.Draft.Nodes {
+				if n.CredentialID != "" {
+					var count int
+					_ = tx.QueryRow(`SELECT count(*) FROM credentials WHERE id=$1 AND user_id=$2`, n.CredentialID, uid).Scan(&count)
+					if count == 0 {
+						fail(w, 400, "credential not found: "+n.CredentialID)
+						return
+					}
+				}
+			}
+			v := 1
+			if current.Valid {
+				v = int(current.Int64) + 1
+			}
+			if _, e = tx.Exec(`INSERT INTO versions VALUES($1,$2,$3)`, x.ID, v, jsonText(x.Draft)); e == nil {
+				_, e = tx.Exec(`UPDATE workflows SET published_version=$1,updated_at=$2 WHERE id=$3`, v, now(), x.ID)
 			}
 			if e != nil {
 				fail(w, 500, "database error")
@@ -203,7 +213,7 @@ func (s *Server) workflows(w http.ResponseWriter, r *http.Request, uid string, p
 				fail(w, 400, "publish before activation")
 				return
 			}
-			_, e := s.db.Exec(`UPDATE workflows SET active=?,updated_at=? WHERE id=?`, a.Active, now(), x.ID)
+			_, e := s.db.Exec(`UPDATE workflows SET active=$1,updated_at=$2 WHERE id=$3`, a.Active, now(), x.ID)
 			if e != nil {
 				fail(w, 500, "database error")
 				return

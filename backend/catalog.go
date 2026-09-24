@@ -38,7 +38,7 @@ func init() {
 func (s *Server) hook(w http.ResponseWriter, r *http.Request, wid string) {
 	var version int
 	var graphStr string
-	e := s.db.QueryRow(`SELECT w.published_version,v.graph FROM workflows w JOIN versions v ON v.workflow_id=w.id AND v.version=w.published_version WHERE w.id=? AND w.active=1`, wid).Scan(&version, &graphStr)
+	e := s.db.QueryRow(`SELECT w.published_version,v.graph FROM workflows w JOIN versions v ON v.workflow_id=w.id AND v.version=w.published_version WHERE w.id=$1 AND w.active=TRUE`, wid).Scan(&version, &graphStr)
 	if e != nil {
 		fail(w, 404, "webhook not active")
 		return
@@ -85,12 +85,12 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request, wid string) {
 	}
 	defer tx.Rollback()
 	var currentVersion int
-	if e = tx.QueryRow(`SELECT published_version FROM workflows WHERE id=? AND active=1`, wid).Scan(&currentVersion); e != nil || currentVersion != version {
+	if e = tx.QueryRow(`SELECT published_version FROM workflows WHERE id=$1 AND active=TRUE FOR UPDATE`, wid).Scan(&currentVersion); e != nil || currentVersion != version {
 		fail(w, 409, "webhook version is no longer active")
 		return
 	}
 	var existing string
-	e = tx.QueryRow(`SELECT run_id FROM trigger_events WHERE workflow_id=? AND version=? AND event_id=?`, wid, version, event).Scan(&existing)
+	e = tx.QueryRow(`SELECT run_id FROM trigger_events WHERE workflow_id=$1 AND version=$2 AND event_id=$3`, wid, version, event).Scan(&existing)
 	if e == nil {
 		x, runErr := getRun(tx, existing)
 		if runErr != nil {
@@ -102,9 +102,9 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request, wid string) {
 	}
 	rid := id()
 	t := now()
-	_, e = tx.Exec(`INSERT INTO runs(id,workflow_id,version,status,input,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, rid, wid, version, "queued", jsonText(input), t, t)
+	_, e = tx.Exec(`INSERT INTO runs(id,workflow_id,version,status,input,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, rid, wid, version, "queued", jsonText(input), t, t)
 	if e == nil {
-		_, e = tx.Exec(`INSERT INTO trigger_events VALUES(?,?,?,?)`, wid, version, event, rid)
+		_, e = tx.Exec(`INSERT INTO trigger_events VALUES($1,$2,$3,$4)`, wid, version, event, rid)
 	}
 	if e != nil {
 		fail(w, 500, "database error")

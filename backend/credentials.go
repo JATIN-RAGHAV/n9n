@@ -57,7 +57,7 @@ func (s *Server) credentials(w http.ResponseWriter, r *http.Request, uid string,
 	if len(p) == 0 {
 		switch r.Method {
 		case "GET":
-			rows, e := s.db.Query(`SELECT id,name,kind,created_at FROM credentials WHERE user_id=? ORDER BY created_at DESC`, uid)
+			rows, e := s.db.Query(`SELECT id,name,kind,created_at FROM credentials WHERE user_id=$1 ORDER BY created_at DESC`, uid)
 			if e != nil {
 				fail(w, 500, "database error")
 				return
@@ -95,7 +95,7 @@ func (s *Server) credentials(w http.ResponseWriter, r *http.Request, uid string,
 			}
 			id := id()
 			created := now()
-			_, e = s.db.Exec(`INSERT INTO credentials VALUES(?,?,?,?,?,?)`, id, uid, a.Name, a.Kind, ciphertext, created)
+			_, e = s.db.Exec(`INSERT INTO credentials VALUES($1,$2,$3,$4,$5,$6)`, id, uid, a.Name, a.Kind, ciphertext, created)
 			if e != nil {
 				fail(w, 500, "database error")
 				return
@@ -105,7 +105,7 @@ func (s *Server) credentials(w http.ResponseWriter, r *http.Request, uid string,
 		}
 	}
 	if len(p) == 1 && r.Method == "DELETE" {
-		res, e := s.db.Exec(`DELETE FROM credentials WHERE id=? AND user_id=?`, p[0], uid)
+		res, e := s.db.Exec(`DELETE FROM credentials WHERE id=$1 AND user_id=$2`, p[0], uid)
 		if e != nil {
 			fail(w, 500, "database error")
 			return
@@ -123,7 +123,7 @@ func (s *Server) credentials(w http.ResponseWriter, r *http.Request, uid string,
 func (s *Server) credentialForJob(w http.ResponseWriter, runID, credID, lease string) {
 	var graphStr, ciphertext, name, kind string
 	var until string
-	e := s.db.QueryRow(`SELECT v.graph,r.lease_until,c.ciphertext,c.name,c.kind FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version JOIN workflows w ON w.id=r.workflow_id JOIN credentials c ON c.id=? AND c.user_id=w.user_id WHERE r.id=? AND r.status='running' AND r.lease_token=?`, credID, runID, lease).Scan(&graphStr, &until, &ciphertext, &name, &kind)
+	e := s.db.QueryRow(`SELECT v.graph,r.lease_until,c.ciphertext,c.name,c.kind FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version JOIN workflows w ON w.id=r.workflow_id JOIN credentials c ON c.id=$1 AND c.user_id=w.user_id WHERE r.id=$2 AND r.status='running' AND r.lease_token=$3`, credID, runID, lease).Scan(&graphStr, &until, &ciphertext, &name, &kind)
 	if e != nil || until < now() {
 		fail(w, 403, "invalid job lease or credential")
 		return
@@ -150,7 +150,7 @@ func (s *Server) credentialForJob(w http.ResponseWriter, runID, credID, lease st
 }
 func (s *Server) credentialForTrigger(w http.ResponseWriter, wid, credID string, version int) {
 	var graphStr, ciphertext, name, kind string
-	e := s.db.QueryRow(`SELECT v.graph,c.ciphertext,c.name,c.kind FROM workflows w JOIN versions v ON v.workflow_id=w.id AND v.version=w.published_version JOIN credentials c ON c.id=? AND c.user_id=w.user_id WHERE w.id=? AND w.active=1 AND v.version=?`, credID, wid, version).Scan(&graphStr, &ciphertext, &name, &kind)
+	e := s.db.QueryRow(`SELECT v.graph,c.ciphertext,c.name,c.kind FROM workflows w JOIN versions v ON v.workflow_id=w.id AND v.version=w.published_version JOIN credentials c ON c.id=$1 AND c.user_id=w.user_id WHERE w.id=$2 AND w.active=TRUE AND v.version=$3`, credID, wid, version).Scan(&graphStr, &ciphertext, &name, &kind)
 	if e != nil {
 		fail(w, 403, "trigger credential unavailable")
 		return

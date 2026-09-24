@@ -69,7 +69,7 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 			return
 		}
 		until := time.Now().UTC().Add(60 * time.Second).Format(timeLayout)
-		res, e := s.db.Exec(`UPDATE runs SET lease_until=?,updated_at=? WHERE id=? AND status='running' AND lease_token=? AND lease_until>?`, until, now(), runID, a.LeaseToken, now())
+		res, e := s.db.Exec(`UPDATE runs SET lease_until=$1,updated_at=$2 WHERE id=$3 AND status='running' AND lease_token=$4 AND lease_until>$5`, until, now(), runID, a.LeaseToken, now())
 		if e != nil {
 			fail(w, 500, "database error")
 			return
@@ -114,7 +114,7 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 		}
 		defer tx.Rollback()
 		var graphStr string
-		e = tx.QueryRow(`SELECT v.graph FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=? AND r.status='running' AND r.lease_token=? AND r.lease_until>?`, runID, a.LeaseToken, now()).Scan(&graphStr)
+		e = tx.QueryRow(`SELECT v.graph FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1 AND r.status='running' AND r.lease_token=$2 AND r.lease_until>$3 FOR UPDATE OF r`, runID, a.LeaseToken, now()).Scan(&graphStr)
 		if e != nil {
 			fail(w, 409, "lease expired")
 			return
@@ -132,7 +132,7 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 			fail(w, 400, "node not in workflow")
 			return
 		}
-		_, e = tx.Exec(`INSERT INTO steps(run_id,node_id,status,input,output,error,branch,attempt,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, runID, a.NodeID, a.Status, jsonText(a.Input), jsonText(a.Output), a.Error, a.Branch, a.Attempt, now())
+		_, e = tx.Exec(`INSERT INTO steps(run_id,node_id,status,input,output,error,branch,attempt,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, runID, a.NodeID, a.Status, jsonText(a.Input), jsonText(a.Output), a.Error, a.Branch, a.Attempt, now())
 		if e != nil {
 			fail(w, 500, "database error")
 			return
@@ -157,7 +157,7 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 			fail(w, 400, "invalid status")
 			return
 		}
-		res, e := s.db.Exec(`UPDATE runs SET status=?,error=?,lease_token=NULL,lease_until=NULL,updated_at=? WHERE id=? AND status='running' AND lease_token=? AND lease_until>?`, a.Status, a.Error, now(), runID, a.LeaseToken, now())
+		res, e := s.db.Exec(`UPDATE runs SET status=$1,error=$2,lease_token=NULL,lease_until=NULL,updated_at=$3 WHERE id=$4 AND status='running' AND lease_token=$5 AND lease_until>$6`, a.Status, a.Error, now(), runID, a.LeaseToken, now())
 		if e != nil {
 			fail(w, 500, "database error")
 			return
@@ -178,7 +178,7 @@ func (s *Server) claim(runner string) (any, error) {
 		return nil, e
 	}
 	defer tx.Rollback()
-	rows, e := tx.Query(`SELECT id FROM runs WHERE status='running' AND lease_until<?`, now())
+	rows, e := tx.Query(`SELECT id FROM runs WHERE status='running' AND lease_until<$1 FOR UPDATE SKIP LOCKED`, now())
 	if e != nil {
 		return nil, e
 	}
@@ -192,14 +192,14 @@ func (s *Server) claim(runner string) (any, error) {
 	rows.Close()
 	for _, rid := range expired {
 		var graphStr string
-		e = tx.QueryRow(`SELECT v.graph FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=?`, rid).Scan(&graphStr)
+		e = tx.QueryRow(`SELECT v.graph FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1`, rid).Scan(&graphStr)
 		if e != nil {
 			return nil, e
 		}
 		var graph Graph
 		_ = json.Unmarshal([]byte(graphStr), &graph)
 		latest := map[string]string{}
-		stepRows, e := tx.Query(`SELECT node_id,status FROM steps WHERE run_id=? ORDER BY id`, rid)
+		stepRows, e := tx.Query(`SELECT node_id,status FROM steps WHERE run_id=$1 ORDER BY id`, rid)
 		if e != nil {
 			return nil, e
 		}
@@ -236,13 +236,13 @@ func (s *Server) claim(runner string) (any, error) {
 			status = "uncertain"
 			reason = "lease expired during non-idempotent action"
 		}
-		if _, e = tx.Exec(`UPDATE runs SET status=?,error=?,lease_token=NULL,lease_until=NULL,updated_at=? WHERE id=?`, status, reason, now(), rid); e != nil {
+		if _, e = tx.Exec(`UPDATE runs SET status=$1,error=$2,lease_token=NULL,lease_until=NULL,updated_at=$3 WHERE id=$4`, status, reason, now(), rid); e != nil {
 			return nil, e
 		}
 	}
 	var rid, wid, graphStr, inputStr string
 	var version int
-	e = tx.QueryRow(`SELECT r.id,r.workflow_id,r.version,v.graph,r.input FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.status='queued' ORDER BY r.created_at LIMIT 1`).Scan(&rid, &wid, &version, &graphStr, &inputStr)
+	e = tx.QueryRow(`SELECT r.id,r.workflow_id,r.version,v.graph,r.input FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.status='queued' ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED`).Scan(&rid, &wid, &version, &graphStr, &inputStr)
 	if errors.Is(e, sql.ErrNoRows) {
 		return nil, tx.Commit()
 	}
@@ -251,11 +251,11 @@ func (s *Server) claim(runner string) (any, error) {
 	}
 	lease := id() + id()
 	until := time.Now().UTC().Add(60 * time.Second).Format(timeLayout)
-	_, e = tx.Exec(`UPDATE runs SET status='running',lease_token=?,lease_until=?,runner_id=?,updated_at=? WHERE id=?`, lease, until, runner, now(), rid)
+	_, e = tx.Exec(`UPDATE runs SET status='running',lease_token=$1,lease_until=$2,runner_id=$3,updated_at=$4 WHERE id=$5`, lease, until, runner, now(), rid)
 	if e != nil {
 		return nil, e
 	}
-	rows, e = tx.Query(`SELECT node_id,status,input,output,error,branch,attempt,created_at FROM steps WHERE run_id=? ORDER BY id`, rid)
+	rows, e = tx.Query(`SELECT node_id,status,input,output,error,branch,attempt,created_at FROM steps WHERE run_id=$1 ORDER BY id`, rid)
 	if e != nil {
 		return nil, e
 	}
@@ -281,7 +281,7 @@ func (s *Server) claim(runner string) (any, error) {
 }
 func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []string) {
 	if len(p) == 0 && r.Method == "GET" {
-		rows, e := s.db.Query(`SELECT w.id,w.published_version,v.graph FROM workflows w JOIN versions v ON v.workflow_id=w.id AND v.version=w.published_version WHERE w.active=1`)
+		rows, e := s.db.Query(`SELECT w.id,w.published_version,v.graph FROM workflows w JOIN versions v ON v.workflow_id=w.id AND v.version=w.published_version WHERE w.active=TRUE`)
 		if e != nil {
 			fail(w, 500, "database error")
 			return
@@ -304,7 +304,7 @@ func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []st
 			var g Graph
 			_ = json.Unmarshal([]byte(t.Graph), &g)
 			var cp string
-			_ = s.db.QueryRow(`SELECT value FROM checkpoints WHERE workflow_id=? AND version=?`, t.ID, t.Version).Scan(&cp)
+			_ = s.db.QueryRow(`SELECT value FROM checkpoints WHERE workflow_id=$1 AND version=$2`, t.ID, t.Version).Scan(&cp)
 			var checkpoint any
 			if cp != "" {
 				_ = json.Unmarshal([]byte(cp), &checkpoint)
@@ -348,14 +348,29 @@ func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []st
 		return
 	}
 	var current int
-	e := s.db.QueryRow(`SELECT published_version FROM workflows WHERE id=? AND active=1`, wid).Scan(&current)
+	e := s.db.QueryRow(`SELECT published_version FROM workflows WHERE id=$1 AND active=TRUE`, wid).Scan(&current)
 	if e != nil || current != a.Version {
 		fail(w, 409, "inactive or stale trigger")
 		return
 	}
 	if p[1] == "checkpoint" {
-		_, e := s.db.Exec(`INSERT INTO checkpoints VALUES(?,?,?) ON CONFLICT(workflow_id,version) DO UPDATE SET value=excluded.value`, wid, a.Version, jsonText(a.Checkpoint))
+		tx, e := s.db.Begin()
 		if e != nil {
+			fail(w, 500, "database error")
+			return
+		}
+		defer tx.Rollback()
+		e = tx.QueryRow(`SELECT published_version FROM workflows WHERE id=$1 AND active=TRUE FOR UPDATE`, wid).Scan(&current)
+		if e != nil || current != a.Version {
+			fail(w, 409, "inactive or stale trigger")
+			return
+		}
+		_, e = tx.Exec(`INSERT INTO checkpoints VALUES($1,$2,$3) ON CONFLICT(workflow_id,version) DO UPDATE SET value=excluded.value`, wid, a.Version, jsonText(a.Checkpoint))
+		if e != nil {
+			fail(w, 500, "database error")
+			return
+		}
+		if e = tx.Commit(); e != nil {
 			fail(w, 500, "database error")
 			return
 		}
@@ -383,13 +398,13 @@ func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []st
 		return
 	}
 	defer tx.Rollback()
-	e = tx.QueryRow(`SELECT published_version FROM workflows WHERE id=? AND active=1`, wid).Scan(&current)
+	e = tx.QueryRow(`SELECT published_version FROM workflows WHERE id=$1 AND active=TRUE FOR UPDATE`, wid).Scan(&current)
 	if e != nil || current != a.Version {
 		fail(w, 409, "inactive or stale trigger")
 		return
 	}
 	var existing string
-	e = tx.QueryRow(`SELECT run_id FROM trigger_events WHERE workflow_id=? AND version=? AND event_id=?`, wid, a.Version, a.EventID).Scan(&existing)
+	e = tx.QueryRow(`SELECT run_id FROM trigger_events WHERE workflow_id=$1 AND version=$2 AND event_id=$3`, wid, a.Version, a.EventID).Scan(&existing)
 	if e == nil {
 		x, runErr := getRun(tx, existing)
 		if runErr != nil {
@@ -401,12 +416,12 @@ func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []st
 	}
 	rid := id()
 	t := now()
-	_, e = tx.Exec(`INSERT INTO runs(id,workflow_id,version,status,input,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, rid, wid, a.Version, "queued", jsonText(a.Input), t, t)
+	_, e = tx.Exec(`INSERT INTO runs(id,workflow_id,version,status,input,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, rid, wid, a.Version, "queued", jsonText(a.Input), t, t)
 	if e == nil {
-		_, e = tx.Exec(`INSERT INTO trigger_events VALUES(?,?,?,?)`, wid, a.Version, a.EventID, rid)
+		_, e = tx.Exec(`INSERT INTO trigger_events VALUES($1,$2,$3,$4)`, wid, a.Version, a.EventID, rid)
 	}
 	if e == nil && a.Checkpoint != nil {
-		_, e = tx.Exec(`INSERT INTO checkpoints VALUES(?,?,?) ON CONFLICT(workflow_id,version) DO UPDATE SET value=excluded.value`, wid, a.Version, jsonText(a.Checkpoint))
+		_, e = tx.Exec(`INSERT INTO checkpoints VALUES($1,$2,$3) ON CONFLICT(workflow_id,version) DO UPDATE SET value=excluded.value`, wid, a.Version, jsonText(a.Checkpoint))
 	}
 	if e != nil {
 		fail(w, 500, "database error")

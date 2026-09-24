@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
+	"net/url"
+	"os"
 	"testing"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 const testKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -14,12 +18,44 @@ const testToken = "0123456789abcdef0123456789abcdef"
 
 func testServer(t *testing.T) *Server {
 	t.Helper()
-	s, e := NewServer(filepath.Join(t.TempDir(), "test.db"), testKey, testToken)
+	s, e := NewServer(testDatabaseURL(t), testKey, testToken)
 	if e != nil {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { s.db.Close() })
 	return s
+}
+func testDatabaseURL(t *testing.T) string {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Fatal("TEST_DATABASE_URL is required for PostgreSQL tests")
+	}
+	u, e := url.Parse(dsn)
+	if e != nil {
+		t.Fatal(e)
+	}
+	schemaName := "n9n_test_" + id()
+	db, e := sql.Open("pgx", dsn)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = db.Exec(`CREATE SCHEMA ` + schemaName); e != nil {
+		db.Close()
+		t.Fatal(e)
+	}
+	db.Close()
+	t.Cleanup(func() {
+		admin, err := sql.Open("pgx", dsn)
+		if err == nil {
+			_, _ = admin.Exec(`DROP SCHEMA ` + schemaName + ` CASCADE`)
+			_ = admin.Close()
+		}
+	})
+	q := u.Query()
+	q.Set("search_path", schemaName)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 func request(t *testing.T, s *Server, cookie *http.Cookie, method, path string, body any, internal bool) (int, map[string]any, *http.Cookie) {
 	t.Helper()
