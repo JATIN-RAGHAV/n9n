@@ -61,11 +61,20 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request, wid string) {
 		return
 	}
 	defer tx.Rollback()
+	var currentVersion int
+	if e = tx.QueryRow(`SELECT published_version FROM workflows WHERE id=? AND active=1`, wid).Scan(&currentVersion); e != nil || currentVersion != version {
+		fail(w, 409, "webhook version is no longer active")
+		return
+	}
 	var existing string
 	e = tx.QueryRow(`SELECT run_id FROM trigger_events WHERE workflow_id=? AND version=? AND event_id=?`, wid, version, event).Scan(&existing)
 	if e == nil {
-		x, _ := getRun(tx, existing)
-		write(w, 200, map[string]any{"run": x, "duplicate": true})
+		x, runErr := getRun(tx, existing)
+		if runErr != nil {
+			write(w, 200, map[string]any{"run": nil, "duplicate": true})
+		} else {
+			write(w, 200, map[string]any{"run": x, "duplicate": true})
+		}
 		return
 	}
 	rid := id()

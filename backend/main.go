@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -12,7 +13,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -24,7 +29,11 @@ type Server struct {
 	runnerToken string
 	key         [32]byte
 	secure      bool
+	authMu      sync.Mutex
+	authWindows map[string]authWindow
+	authSlots   chan struct{}
 }
+type authWindow struct { Start time.Time; Count int }
 type Node struct {
 	ID           string             `json:"id"`
 	Type         string             `json:"type"`
@@ -91,7 +100,16 @@ func main() {
 	}
 	defer s.db.Close()
 	server := &http.Server{Addr: env("ADDR", ":8080"), Handler: s, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
-	log.Fatal(server.ListenAndServe())
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go s.maintain(ctx)
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil { log.Printf("shutdown: %v", err) }
+	}()
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) { log.Fatal(err) }
 }
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {
@@ -122,15 +140,40 @@ func NewServer(path, key, token string) (*Server, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &Server{db: db, runnerToken: token, secure: os.Getenv("COOKIE_SECURE") == "true"}
+	s := &Server{db: db, runnerToken: token, secure: os.Getenv("COOKIE_SECURE") == "true", authWindows: map[string]authWindow{}, authSlots: make(chan struct{}, 4)}
 	copy(s.key[:], keyBytes)
-	for _, q := range schema {
-		if _, err = db.Exec(q); err != nil {
-			db.Close()
-			return nil, err
-		}
-	}
+	if err = migrate(db); err != nil { db.Close(); return nil, err }
 	return s, nil
+}
+
+func migrate(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil { return err }
+	defer tx.Rollback()
+	var version int
+	if err = tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil { return err }
+	if version > 1 { return errors.New("database schema is newer than this server") }
+	if version == 0 {
+		for _, q := range schema { if _, err = tx.Exec(q); err != nil { return err } }
+		if _, err = tx.Exec(`PRAGMA user_version = 1`); err != nil { return err }
+	}
+	return tx.Commit()
+}
+
+func (s *Server) maintain(ctx context.Context) {
+	run := func() {
+		cutoff := now()
+		if _, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at<?`, cutoff); err != nil { log.Printf("session cleanup: %v", err) }
+		if _, err := s.db.Exec(`DELETE FROM oauth_states WHERE expires_at<?`, cutoff); err != nil { log.Printf("OAuth state cleanup: %v", err) }
+		days, err := strconv.Atoi(env("RUN_RETENTION_DAYS", "30"))
+		if err != nil || days < 1 { days = 30 }
+		before := time.Now().UTC().AddDate(0, 0, -days).Format(timeLayout)
+		if _, err := s.db.Exec(`DELETE FROM runs WHERE status IN ('succeeded','failed','cancelled','uncertain') AND updated_at<?`, before); err != nil { log.Printf("run cleanup: %v", err) }
+	}
+	run()
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for { select { case <-ctx.Done(): return; case <-ticker.C: run() } }
 }
 
 var schema = []string{
@@ -162,7 +205,10 @@ func fail(w http.ResponseWriter, status int, msg string) {
 	write(w, status, map[string]any{"error": msg})
 }
 func decode(r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
+	return decodeLimit(r, v, 1<<20)
+}
+func decodeLimit(r *http.Request, v any, bytes int64) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, bytes)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
@@ -198,6 +244,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")[1:]
+	if len(parts) == 0 {
+		fail(w, 404, "not found")
+		return
+	}
 	if len(parts) == 1 && parts[0] == "health" && r.Method == "GET" {
 		write(w, 200, map[string]string{"status": "ok"})
 		return

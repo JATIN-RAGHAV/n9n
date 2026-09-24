@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
 var emptyGraph = Graph{Nodes: []Node{}, Edges: []Edge{}}
+var nodeIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var mappingPattern = regexp.MustCompile(`\{\{\s*(input|nodes)\.([A-Za-z0-9_-]+)(?:\.([A-Za-z0-9_.-]+))?\s*\}\}`)
 
 func loadWorkflow(db *sql.DB, id, uid string) (Workflow, error) {
 	var w Workflow
@@ -240,7 +243,7 @@ func validateDraft(g Graph) error {
 	}
 	ids := map[string]bool{}
 	for _, n := range g.Nodes {
-		if n.ID == "" || len(n.ID) > 100 || ids[n.ID] {
+		if n.ID == "" || len(n.ID) > 100 || !nodeIDPattern.MatchString(n.ID) || ids[n.ID] {
 			return errors.New("invalid or duplicate node ID")
 		}
 		ids[n.ID] = true
@@ -323,10 +326,16 @@ func validatePublish(g Graph) error {
 			if m == "" {
 				return errors.New("http_request requires method")
 			}
-			switch strings.ToUpper(m) {
+			switch m {
 			case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD":
 			default:
 				return errors.New("unsupported HTTP method")
+			}
+			if value, present := n.Config["idempotency_key"]; present {
+				key, ok := value.(string)
+				if !ok || strings.TrimSpace(key) == "" {
+					return errors.New("idempotency_key must be a nonempty string")
+				}
 			}
 		case "condition":
 			op, _ := n.Config["operator"].(string)
@@ -384,6 +393,50 @@ func validatePublish(g Graph) error {
 	}
 	if len(seen) != len(nodes) {
 		return errors.New("all nodes must be reachable from trigger")
+	}
+	for _, n := range g.Nodes {
+		ancestors := map[string]bool{}
+		var collect func(string)
+		collect = func(target string) {
+			for _, e := range g.Edges {
+				if e.Target == target && !ancestors[e.Source] {
+					ancestors[e.Source] = true
+					collect(e.Source)
+				}
+			}
+		}
+		collect(n.ID)
+		if e := validateMappings(n.Config, ancestors); e != nil {
+			return fmt.Errorf("node %s: %w", n.ID, e)
+		}
+	}
+	return nil
+}
+func validateMappings(value any, ancestors map[string]bool) error {
+	switch v := value.(type) {
+	case string:
+		matches := mappingPattern.FindAllStringSubmatchIndex(v, -1)
+		clean := mappingPattern.ReplaceAllString(v, "")
+		if strings.Contains(clean, "{{") || strings.Contains(clean, "}}") {
+			return errors.New("invalid mapping expression")
+		}
+		for _, match := range matches {
+			if v[match[2]:match[3]] == "nodes" && !ancestors[v[match[4]:match[5]]] {
+				return fmt.Errorf("mapping references a node that is not upstream: %s", v[match[4]:match[5]])
+			}
+		}
+	case map[string]any:
+		for _, item := range v {
+			if err := validateMappings(item, ancestors); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if err := validateMappings(item, ancestors); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

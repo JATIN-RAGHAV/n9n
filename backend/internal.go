@@ -92,7 +92,7 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 			Branch     string `json:"branch"`
 			Attempt    int    `json:"attempt"`
 		}
-		if e := decode(r, &a); e != nil {
+		if e := decodeLimit(r, &a, 4<<20); e != nil {
 			fail(w, 400, e.Error())
 			return
 		}
@@ -212,7 +212,7 @@ func (s *Server) claim(runner string) (any, error) {
 		stepRows.Close()
 		unsafe := false
 		for _, n := range graph.Nodes {
-			if latest[n.ID] != "running" {
+			if latest[n.ID] != "running" && latest[n.ID] != "failed" {
 				continue
 			}
 			if n.Type == "send_email" {
@@ -223,7 +223,8 @@ func (s *Server) claim(runner string) (any, error) {
 				if m == "" {
 					m = "GET"
 				}
-				_, idempotent := n.Config["idempotency_key"]
+				key, _ := n.Config["idempotency_key"].(string)
+				idempotent := key != ""
 				if !(strings.EqualFold(m, "GET") || strings.EqualFold(m, "HEAD") || idempotent) {
 					unsafe = true
 				}
@@ -378,11 +379,20 @@ func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []st
 		return
 	}
 	defer tx.Rollback()
+	e = tx.QueryRow(`SELECT published_version FROM workflows WHERE id=? AND active=1`, wid).Scan(&current)
+	if e != nil || current != a.Version {
+		fail(w, 409, "inactive or stale trigger")
+		return
+	}
 	var existing string
 	e = tx.QueryRow(`SELECT run_id FROM trigger_events WHERE workflow_id=? AND version=? AND event_id=?`, wid, a.Version, a.EventID).Scan(&existing)
 	if e == nil {
-		x, _ := getRun(tx, existing)
-		write(w, 200, map[string]any{"run": x, "duplicate": true})
+		x, runErr := getRun(tx, existing)
+		if runErr != nil {
+			write(w, 200, map[string]any{"run": nil, "duplicate": true})
+		} else {
+			write(w, 200, map[string]any{"run": x, "duplicate": true})
+		}
 		return
 	}
 	rid := id()
@@ -398,6 +408,9 @@ func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []st
 		fail(w, 500, "database error")
 		return
 	}
-	_ = tx.Commit()
+	if e = tx.Commit(); e != nil {
+		fail(w, 500, "database error")
+		return
+	}
 	write(w, 200, map[string]any{"run": Run{ID: rid, WorkflowID: wid, Version: a.Version, Status: "queued", Input: a.Input, CreatedAt: t, UpdatedAt: t}, "duplicate": false})
 }
