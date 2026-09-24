@@ -3,6 +3,7 @@
 ## Implemented
 
 - Go API: account registration and sessions, workflow drafts and versions, graph validation, credential encryption, durable run and step records, lease based internal job protocol, webhook enqueue, and node catalog.
+- Draft testing: validate and execute the saved graph as an immutable test snapshot without publishing it, then inspect every node's status, inputs, outputs, branch, skipped state, and failure detail.
 - Rust worker: queued run execution, graph mappings, conditions, HTTP requests, Gmail email, trigger polling, retries and cancellation checks.
 - Flutter Web: auth screens, workflow list, searchable node palette, drag canvas with pan and zoom, port connections and deletion, undo and redo, node settings, mapping suggestions, draft save, publish, activate, manual run, run inspection, and credential management.
 - React Native / Expo for Android and iOS: native sign-in/register with server-revocable bearer tokens in platform secure storage, workflow listing and editing, node configuration and connection controls, save/publish/activate/run, run inspection/cancel, credentials, dark/light toggle, and configurable API origin.
@@ -18,6 +19,7 @@
 - The final OpenAPI document passed Redocly validation. It has 33 nonblocking warnings for unspecified license metadata and routes using a default error response instead of an explicit 4xx response.
 - All three application images built and their services became healthy. The final public API smoke passed.
 - A restart smoke confirmed that a queued version 1 run survived a backend restart. After version 2 was published, the worker executed the queued run against version 1 and a new run against version 2.
+- Complex draft-test smoke covers a seven-node flow with mapped values, nested conditions, both branch outputs and skipped steps, and confirms draft testing leaves publication untouched; a second test verifies a missing input fails at the exact step with captured diagnostics.
 - Native bearer session API tests cover registration/login, cookie isolation, bearer precedence, expiration, logout revocation, and authenticated workflow access. `tests/mobile_api_smoke.py` exercises a native session through a published workflow run.
 - Mobile client type checks, graph operation tests, and Android/iOS JavaScript bundle exports are part of CI. Installable signed native binaries require Xcode/Android SDK or configured EAS credentials.
 - Persistent browser automation passed in 16 seconds. It exercised account and workflow creation, node placement and port connection, save, publish, successful run and step inspection, reload, mobile navigation and credentials, Wasm and MJS MIME responses, and confirmed zero page errors.

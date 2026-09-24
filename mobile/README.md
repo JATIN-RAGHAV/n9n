@@ -13,7 +13,7 @@ npm start
 
 Press `a` for Android or `i` for iOS if the relevant simulator is installed, or scan the Expo QR code with Expo Go. In **Settings → Server address**, set the API origin. Use `http://10.0.2.2:8080` from the Android emulator, `http://localhost:8080` from an iOS simulator, or the development computer's LAN IP from a physical device. Use an HTTPS origin for a remote server. Local HTTP may require Android cleartext/network security configuration when producing a native release build; development tooling permits local testing.
 
-The mobile workflow editor supports the initial trigger, transform, HTTP, condition, and Gmail nodes; node configuration, graph connections, saving, publishing, activation, and manual runs with editable JSON input. Assign an existing Gmail credential to Gmail nodes in the editor. Add or remove credentials in the Credentials tab; Gmail OAuth browser authorization remains in the web app, and the mobile app can also enter a refresh token manually. It does not provide native Google OAuth.
+The mobile workflow editor supports the initial trigger, transform, HTTP, condition, and Gmail nodes; node configuration, graph connections, saving, publishing, activation, and manual runs with editable JSON input. **Test draft** runs the saved graph snapshot without publishing it, then opens the per-step run inspector. HTTP and Gmail nodes still perform their configured external actions during a test. Assign an existing Gmail credential to Gmail nodes in the editor. Add or remove credentials in the Credentials tab; Gmail OAuth browser authorization remains in the web app, and the mobile app can also enter a refresh token manually. It does not provide native Google OAuth.
 
 ## Validate and build
 

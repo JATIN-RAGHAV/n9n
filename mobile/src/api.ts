@@ -70,6 +70,9 @@ export class Api {
   startRun(id: string, input: JsonObject) {
     return this.request<{ run: Run }>(`/workflows/${encodeURIComponent(id)}/run`, 'POST', { input });
   }
+  testDraft(id: string, input: JsonObject) {
+    return this.request<{ run: Run }>(`/workflows/${encodeURIComponent(id)}/test`, 'POST', { input });
+  }
   runs(workflowId?: string) {
     const query = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : '';
     return this.request<{ runs: Run[] }>(`/runs${query}`);

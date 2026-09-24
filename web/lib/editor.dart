@@ -363,13 +363,48 @@ class _EditorScreenState extends State<EditorScreen> {
 
   Future<void> runNow() async {
     if (workflow == null) return;
+    final data = await runInputDialog(
+        title: 'Run workflow',
+        description: 'Input JSON available to nodes as {{input.FIELD}}.');
+    if (data == null) return;
+    try {
+      final run = await widget.api.run(workflow!.id, data);
+      if (mounted) widget.onNavigate('/runs/${run['id']}');
+    } catch (e) {
+      if (mounted) showError(context, '$e');
+    }
+  }
+
+  Future<void> testDraft() async {
+    if (workflow == null || busy) return;
+    final data = await runInputDialog(
+        title: 'Test saved draft',
+        description: 'This validates and runs the saved draft without publishing it. HTTP and Gmail nodes execute their configured actions, which may affect external services.');
+    if (data == null || !mounted) return;
+    setState(() => busy = true);
+    try {
+      if (dirty) {
+        workflow = await widget.api.saveWorkflow(workflow!);
+        if (mounted) setState(() => dirty = false);
+      }
+      final run = await widget.api.testDraft(workflow!.id, data);
+      if (mounted) widget.onNavigate('/runs/${run['id']}');
+    } catch (e) {
+      if (mounted) showError(context, '$e');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<Json?> runInputDialog(
+      {required String title, required String description}) async {
     final input = TextEditingController(text: '{}');
     String? localError;
     final data = await showDialog<Json>(
         context: context,
         builder: (context) => StatefulBuilder(
             builder: (context, setDialog) => AlertDialog(
-                    title: Text('Run workflow'),
+                    title: Text(title),
                     content: SizedBox(
                         width: 450,
                         child: Column(
@@ -377,7 +412,7 @@ class _EditorScreenState extends State<EditorScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                  'Input JSON available to nodes as {{input.FIELD}}.',
+                                  description,
                                   style:
                                       TextStyle(color: context.palette.muted)),
                               const SizedBox(height: 16),
@@ -414,13 +449,7 @@ class _EditorScreenState extends State<EditorScreen> {
                           child: Text('Start run'))
                     ])));
     disposeDialogController(input);
-    if (data == null) return;
-    try {
-      final run = await widget.api.run(workflow!.id, data);
-      if (mounted) widget.onNavigate('/runs/${run['id']}');
-    } catch (e) {
-      if (mounted) showError(context, '$e');
-    }
+    return data;
   }
 
   Future<void> editName() async {
@@ -518,6 +547,13 @@ class _EditorScreenState extends State<EditorScreen> {
                           ? Icons.pause_circle_outline
                           : Icons.play_circle_outline),
                       label: Text(workflow!.active ? 'Pause' : 'Activate')),
+                FilledButton.icon(
+                    onPressed: busy ? null : testDraft,
+                    style: FilledButton.styleFrom(
+                        backgroundColor: context.palette.panelRaised,
+                        foregroundColor: context.palette.ink),
+                    icon: Icon(Icons.science_outlined),
+                    label: Text('Test draft')),
                 FilledButton.icon(
                     onPressed: busy || workflow!.publishedVersion == null
                         ? null

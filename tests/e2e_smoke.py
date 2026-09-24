@@ -74,6 +74,69 @@ def main():
     c.call("POST", "/api/auth/register", {"email": email, "password": "smoke-password-123"})
     assert c.call("GET", "/api/auth/me")["user"]["email"] == email
 
+    draft_test_graph = {
+        "nodes": [
+            node("trigger", "manual_trigger"),
+            node("normalize", "set_fields", {"fields": {
+                "customer": "{{input.customer}}", "score": "{{input.score}}",
+            }}),
+            node("threshold", "condition", {"left": "{{nodes.normalize.score}}", "operator": "greater_than", "right": 5}),
+            node("known_customer", "condition", {"left": "{{nodes.normalize.customer}}", "operator": "contains", "right": "@"}),
+            node("approved", "set_fields", {"fields": {
+                "decision": "approved", "recipient": "{{nodes.normalize.customer}}",
+            }}),
+            node("invalid_customer", "set_fields", {"fields": {"decision": "invalid"}}),
+            node("review", "set_fields", {"fields": {"decision": "review"}}),
+        ],
+        "edges": [
+            edge("a", "trigger", "normalize"),
+            edge("b", "normalize", "threshold"),
+            edge("c", "threshold", "known_customer", "true"),
+            edge("d", "threshold", "review", "false"),
+            edge("e", "known_customer", "approved", "true"),
+            edge("f", "known_customer", "invalid_customer", "false"),
+        ],
+    }
+    draft_id = c.call("POST", "/api/workflows", {
+        "name": "smoke draft test", "draft": draft_test_graph,
+    })["workflow"]["id"]
+    draft_run = c.call("POST", f"/api/workflows/{draft_id}/test", {
+        "input": {"customer": "Ada@example.com", "score": 9},
+    })["run"]
+    edited_after_queue = json.loads(json.dumps(draft_test_graph))
+    edited_after_queue["nodes"][4]["config"]["fields"]["decision"] = "changed after queue"
+    c.call("PUT", f"/api/workflows/{draft_id}", {
+        "name": "smoke draft test", "draft": edited_after_queue,
+    })
+    draft_detail = until(c, draft_run["id"])
+    assert draft_detail["run"]["status"] == "succeeded", draft_detail
+    assert draft_detail["run"]["test"] is True and draft_detail["run"]["version"] == 0
+    assert draft_detail["node_types"]["known_customer"] == "condition"
+    draft_steps = {step["node_id"]: step for step in draft_detail["steps"]}
+    assert draft_steps["approved"]["output"]["recipient"] == "Ada@example.com"
+    assert draft_steps["approved"]["output"]["decision"] == "approved"
+    assert draft_steps["invalid_customer"]["status"] == "skipped"
+    assert draft_steps["review"]["status"] == "skipped"
+    assert c.call("GET", f"/api/workflows/{draft_id}")["workflow"]["published_version"] is None
+    print("PASS: unpublished draft test preserves its queued snapshot, mappings, nested branches, skips, and publish state")
+
+    failure_graph = {
+        "nodes": [node("trigger", "manual_trigger"), node("missing", "set_fields", {
+            "fields": {"copy": "{{input.absent.value}}"},
+        })],
+        "edges": [edge("failure", "trigger", "missing")],
+    }
+    failure_id = c.call("POST", "/api/workflows", {
+        "name": "smoke draft failure", "draft": failure_graph,
+    })["workflow"]["id"]
+    failure_run = c.call("POST", f"/api/workflows/{failure_id}/test", {"input": {}})["run"]
+    failure_detail = until(c, failure_run["id"])
+    assert failure_detail["run"]["status"] == "failed", failure_detail
+    failure_steps = {step["node_id"]: step for step in failure_detail["steps"]}
+    assert failure_steps["missing"]["status"] == "failed", failure_detail
+    assert "missing input field absent" in failure_steps["missing"]["error"], failure_detail
+    print("PASS: draft test captures runtime failure at the exact step with error details")
+
     graph = {
         "nodes": [
             node("trigger", "manual_trigger"),

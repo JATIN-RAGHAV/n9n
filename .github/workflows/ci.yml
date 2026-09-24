@@ -95,3 +95,24 @@ jobs:
           node-version: 22
       - run: npx --yes @redocly/cli@1.34.3 lint contracts/openapi.yaml
       - run: docker compose --env-file .env.example config --quiet
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make up
+      - run: python3 tests/e2e_smoke.py
+      - run: python3 tests/mobile_api_smoke.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/browser/package-lock.json
+      - run: npm ci
+        working-directory: tests/browser
+      - run: npx playwright install --with-deps chromium
+        working-directory: tests/browser
+      - run: npm test -- --workers=1
+        working-directory: tests/browser
+      - if: always()
+        run: docker compose down --volumes

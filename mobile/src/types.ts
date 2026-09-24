@@ -32,6 +32,7 @@ export type Run = {
   id: string;
   workflow_id: string;
   status: string;
+  test?: boolean;
   error?: string | null;
   version?: number;
   created_at?: string;

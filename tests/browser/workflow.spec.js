@@ -60,6 +60,23 @@ test('Flutter Wasm UI builds and runs a workflow across a deep link and mobile m
   await page.getByRole('button', { name: 'Connect input' }).click();
   await page.getByRole('button', { name: 'Save draft' }).click();
   await expect(page.getByText('Draft saved').last()).toBeVisible();
+  await page.getByRole('button', { name: 'Test draft' }).click();
+  await expect(page.getByText('Test saved draft')).toBeVisible();
+  await page.getByRole('button', { name: 'Start run' }).click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f]+/);
+  const testRunId = currentRoute(page).split('/').at(-1);
+  await expect.poll(async () => (await (await page.request.get(`/api/runs/${testRunId}`)).json()).run?.status)
+    .toBe('succeeded');
+  const testRun = await (await page.request.get(`/api/runs/${testRunId}`)).json();
+  expect(testRun.run.test).toBe(true);
+  expect(testRun.run.version).toBe(0);
+  expect((await (await page.request.get(`/api/workflows/${workflowPath.split('/').at(-1)}`)).json()).workflow.published_version)
+    .toBeNull();
+  await expect(page.getByText('DRAFT TEST')).toBeVisible();
+  await expect(page.getByText('STEP BY STEP')).toBeVisible();
+
+  await page.goto(workflowPath);
+  await enableFlutterSemantics(page);
   await page.getByRole('button', { name: 'Publish' }).click();
   await expect(page.getByText(/Version 1 published/).last()).toBeVisible();
 
@@ -91,6 +108,29 @@ test('Flutter Wasm UI builds and runs a workflow across a deep link and mobile m
   await page.getByRole('menuitem', { name: 'Credentials' }).click();
   await expect(page).toHaveURL(/\/credentials$/);
   await expect(page.getByRole('button', { name: 'Connect Gmail' }).first()).toBeVisible();
+
+  const failureResponse = await page.request.post('/api/workflows', { data: {
+    name: 'Browser deliberate failure',
+    draft: {
+      nodes: [
+        { id: 'trigger', type: 'manual_trigger', position: { x: 0, y: 0 }, config: {} },
+        { id: 'missing', type: 'set_fields', position: { x: 200, y: 0 }, config: { fields: { copy: '{{input.absent.value}}' } } },
+      ],
+      edges: [{ id: 'failure-edge', source: 'trigger', target: 'missing', source_port: 'out' }],
+    },
+  } });
+  expect(failureResponse.ok()).toBeTruthy();
+  const failureWorkflowId = (await failureResponse.json()).workflow.id;
+  await page.goto(`/workflows/${failureWorkflowId}`);
+  await enableFlutterSemantics(page);
+  await page.getByRole('button', { name: 'Test draft' }).click();
+  await expect(page.getByText('Test saved draft')).toBeVisible();
+  await page.getByRole('button', { name: 'Start run' }).click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f]+/);
+  const failureRunId = currentRoute(page).split('/').at(-1);
+  await expect.poll(async () => (await (await page.request.get(`/api/runs/${failureRunId}`)).json()).run?.status)
+    .toBe('failed');
+  await expect(page.getByRole('group', { name: /missing input field absent/ })).toBeVisible();
 
   expect(errors, `uncaught browser errors: ${errors.join(' | ')}`).toEqual([]);
   const wasm = assets.filter((asset) => /\.wasm(?:\?|$)/.test(asset.url));

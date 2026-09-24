@@ -25,12 +25,20 @@ def main():
         'edges': [edge('connection', 'trigger', 'result')],
     }}, headers=headers)['workflow']
     wid = workflow['id']
-    client.call('POST', f'/api/workflows/{wid}/publish', headers=headers)
-    run = client.call('POST', f'/api/workflows/{wid}/run', {'input': {'client': 'mobile'}}, headers=headers)['run']
     # The shared helper receives a bound bearer header on every polling call.
     class NativeClient:
         def call(self, method, path):
             return client.call(method, path, headers=headers)
+
+    tested = client.call('POST', f'/api/workflows/{wid}/test', {'input': {'client': 'mobile-test'}}, headers=headers)['run']
+    test_detail = until(NativeClient(), tested['id'])
+    assert test_detail['run']['status'] == 'succeeded' and test_detail['run']['test'] is True
+    assert tested['version'] == 0
+    assert any((s.get('output') or {}).get('client') == 'mobile-test' for s in test_detail['steps'])
+    assert client.call('GET', f'/api/workflows/{wid}', headers=headers)['workflow']['published_version'] is None
+
+    client.call('POST', f'/api/workflows/{wid}/publish', headers=headers)
+    run = client.call('POST', f'/api/workflows/{wid}/run', {'input': {'client': 'mobile'}}, headers=headers)['run']
     detail = until(NativeClient(), run['id'])
     assert detail['run']['status'] == 'succeeded', detail
     assert any((s.get('output') or {}).get('client') == 'mobile' for s in detail['steps'])
@@ -40,7 +48,7 @@ def main():
     fresh = {'Authorization': 'Bearer ' + login['token']}
     assert client.call('GET', f'/api/workflows/{wid}', headers=fresh)['workflow']['id'] == wid
     client.call('POST', '/api/auth/logout', headers=fresh)
-    print('PASS: native registration/login, no ambient cookies, authenticated workflow execution, session revocation')
+    print('PASS: native bearer auth, unpublished draft test, published workflow run, and session revocation')
 
 
 if __name__ == '__main__':

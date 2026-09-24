@@ -113,7 +113,7 @@ export function HomeScreen({ api, onOpen, onRun, onUnauthorized }: {
     {runs.length === 0 && !loading && <Label muted>No runs yet.</Label>}
     {runs.slice(0, 6).map(run => <Pressable key={run.id} accessibilityRole="button" onPress={() => onRun(run.id)}
       style={{ paddingVertical: 12, borderBottomColor: '#343943', borderBottomWidth: 1 }}>
-      <Label bold>{run.status.toUpperCase()}</Label><Label muted size={12}>{run.id.slice(0, 10)} · {run.created_at || ''}</Label>
+      <Label bold>{run.test ? 'DRAFT TEST · ' : ''}{run.status.toUpperCase()}</Label><Label muted size={12}>{run.id.slice(0, 10)} · {run.created_at || ''}</Label>
     </Pressable>)}
     <Modal visible={creating} transparent animationType="fade" onRequestClose={() => setCreating(false)}>
       <View style={{ flex: 1, justifyContent: 'center', backgroundColor: '#0009', padding: 22 }}>
@@ -173,7 +173,7 @@ export function RunDetailScreen({ api, runId, onUnauthorized }: {
     <ErrorText message={error} />
     {!run && !error && <ActivityIndicator style={{ marginTop: 30 }} />}
     {run && <><Panel style={{ marginTop: 18 }}>
-      <Label size={18} bold>{run.status.toUpperCase()} · v{run.version || '?'}</Label>
+      <Label size={18} bold>{run.test ? 'DRAFT TEST · ' : ''}{run.status.toUpperCase()} · {run.test ? 'draft snapshot' : `v${run.version || '?'}`}</Label>
       <Label muted size={12} style={{ marginTop: 8 }}>Created {run.created_at || '—'}</Label>
       <Label muted size={12}>Updated {run.updated_at || '—'}</Label>
       {run.error && <ErrorText message={run.error} />}

@@ -88,6 +88,19 @@ export function EditorScreen({ api, workflowId, onRun, onDirtyChange, onUnauthor
       const result = await api.startRun(workflowId, input as JsonObject); onRun(result.run.id);
     } catch (e) { if (e instanceof ApiError && e.status === 401) onUnauthorized(); else setError(describe(e)); }
   };
+  const testDraft = () => Alert.alert('Test saved draft?',
+    'This runs the saved draft without publishing it. HTTP and Gmail nodes will execute their configured actions and may affect external services.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Run test', style: 'destructive', onPress: async () => {
+        try {
+          const input: unknown = JSON.parse(runInput);
+          if (input === null || Array.isArray(input) || typeof input !== 'object') throw new Error('Run input must be a JSON object.');
+          if (!saved && !await save()) return;
+          const result = await api.testDraft(workflowId, input as JsonObject);
+          onRun(result.run.id);
+        } catch (e) { if (e instanceof ApiError && e.status === 401) onUnauthorized(); else setError(describe(e)); }
+      } },
+    ]);
   const makeConnection = () => {
     if (!source || !target) { setError('Select a source and target node.'); return; }
     try { changeDraft(connect(draft, source, target, port)); setSource(null); setTarget(null); setPort('out'); }
@@ -110,8 +123,9 @@ export function EditorScreen({ api, workflowId, onRun, onDirtyChange, onUnauthor
       <View style={{ flex: 1 }}><Action title="Publish" secondary onPress={publish} /></View>
     </View>
     <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+      <View style={{ flex: 1 }}><Action title="Test draft" secondary onPress={testDraft} /></View>
       <View style={{ flex: 1 }}><Action title={workflow?.active ? 'Deactivate' : 'Activate'} secondary disabled={!workflow?.published_version} onPress={() => activate(!workflow?.active)} /></View>
-      <View style={{ flex: 1 }}><Action title="Run now" onPress={run} /></View>
+      <View style={{ flex: 1 }}><Action title="Run now" disabled={!workflow?.published_version} onPress={run} /></View>
     </View>
     <ErrorText message={error} />
 

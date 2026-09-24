@@ -1034,7 +1034,12 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
       final data = await widget.api.runDetail(widget.runId);
       if (!mounted) return;
       final run = asJson(data['run']);
-      if (nodeTypes.isEmpty && run['workflow_id'] != null) {
+      final snapshotTypes = asJson(data['node_types']);
+      if (snapshotTypes.isNotEmpty) {
+        nodeTypes
+          ..clear()
+          ..addAll(snapshotTypes.map((key, value) => MapEntry(key, '$value')));
+      } else if (nodeTypes.isEmpty && run['workflow_id'] != null) {
         try {
           final workflow = await widget.api.workflow('${run['workflow_id']}');
           for (final node in workflow.draft.nodes) {
@@ -1121,6 +1126,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                 padding: const EdgeInsets.all(22),
                 child: Wrap(spacing: 28, runSpacing: 15, children: [
                   InfoDatum('STATUS', '${run['status'] ?? ''}'),
+                  InfoDatum('MODE', run['test'] == true ? 'DRAFT TEST' : 'PUBLISHED RUN'),
                   InfoDatum('CREATED', '${run['created_at'] ?? ''}'),
                   InfoDatum('UPDATED', '${run['updated_at'] ?? ''}')
                 ]))),

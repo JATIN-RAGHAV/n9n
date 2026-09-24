@@ -70,6 +70,8 @@ class Api {
           'POST', '/workflows/$id/activate', {'active': active}))['workflow']));
   Future<Json> run(String id, Json input) async => asJson(
       (await request('POST', '/workflows/$id/run', {'input': input}))['run']);
+  Future<Json> testDraft(String id, Json input) async => asJson(
+      (await request('POST', '/workflows/$id/test', {'input': input}))['run']);
   Future<
       List<Json>> runs({String? workflowId}) async => asJsonList((await request(
           'GET',
