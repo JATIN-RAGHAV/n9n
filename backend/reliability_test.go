@@ -26,7 +26,7 @@ func TestSchemaMigrationAndRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 		var version int
-		if err := s.db.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil || version != 1 {
+		if err := s.db.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
 			t.Fatalf("migration version=%d err=%v", version, err)
 		}
 		if i == 0 {
@@ -39,6 +39,51 @@ func TestSchemaMigrationAndRestart(t *testing.T) {
 			t.Fatalf("lost legacy data: %q %v", email, err)
 		}
 		s.db.Close()
+	}
+}
+
+func TestDraftTestRunClaimsSavedGraphSnapshotWithoutPublishing(t *testing.T) {
+	s := testServer(t)
+	cookie := registered(t, s, "draft-test-"+id()+"@example.com")
+	graph := map[string]any{
+		"nodes": []any{
+			map[string]any{"id": "start", "type": "manual_trigger", "position": map[string]any{"x": 0, "y": 0}, "config": map[string]any{}},
+			map[string]any{"id": "copy", "type": "set_fields", "position": map[string]any{"x": 200, "y": 0}, "config": map[string]any{"fields": map[string]any{"customer": "{{input.customer}}"}}},
+		},
+		"edges": []any{map[string]any{"id": "edge", "source": "start", "target": "copy", "source_port": "out"}},
+	}
+	status, value, _ := request(t, s, cookie, "POST", "/api/workflows", map[string]any{"name": "draft test", "draft": graph}, false)
+	requireOK(t, status, value)
+	wid := value["workflow"].(map[string]any)["id"].(string)
+	status, value, _ = request(t, s, cookie, "POST", "/api/workflows/"+wid+"/test", map[string]any{"input": map[string]any{"customer": "Ada"}}, false)
+	requireOK(t, status, value)
+	run := value["run"].(map[string]any)
+	if run["version"] != float64(0) || run["test"] != true {
+		t.Fatalf("expected an unversioned draft test run, got %#v", run)
+	}
+	status, value, _ = request(t, s, cookie, "GET", "/api/workflows/"+wid, nil, false)
+	requireOK(t, status, value)
+	if value["workflow"].(map[string]any)["published_version"] != nil {
+		t.Fatal("testing a draft unexpectedly published it")
+	}
+	graph["nodes"].([]any)[1].(map[string]any)["config"].(map[string]any)["fields"].(map[string]any)["customer"] = "mutated"
+	status, value, _ = request(t, s, cookie, "PUT", "/api/workflows/"+wid, map[string]any{"name": "draft test", "draft": graph}, false)
+	requireOK(t, status, value)
+	claimed, err := s.claim("test-runner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := claimed.(map[string]any)
+	if job["test"] != true || job["version"] != 0 {
+		t.Fatalf("claimed job lost test metadata: %#v", job)
+	}
+	input := job["input"].(map[string]any)
+	if input["customer"] != "Ada" {
+		t.Fatalf("test input wrapper was not decoded: %#v", input)
+	}
+	claimedGraph := job["graph"].(Graph)
+	if claimedGraph.Nodes[1].Config["fields"].(map[string]any)["customer"] != "{{input.customer}}" {
+		t.Fatal("queued test used the edited draft instead of its snapshot")
 	}
 }
 

@@ -157,6 +157,16 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/Run'}
         default: {$ref: '#/components/responses/Error'}
+  /workflows/{id}/test:
+    parameters:
+      - {$ref: '#/components/parameters/id'}
+    post:
+      operationId: testWorkflowDraft
+      summary: Validate and queue a run of the saved draft snapshot without publishing it
+      requestBody: {$ref: '#/components/requestBodies/RunInput'}
+      responses:
+        '200': {$ref: '#/components/responses/Run'}
+        default: {$ref: '#/components/responses/Error'}
   /runs:
     get:
       operationId: listRuns
@@ -369,10 +379,10 @@ components:
     WorkflowCreate: {type: object, properties: {name: {type: string, maxLength: 200}, draft: {$ref: '#/components/schemas/Graph'}}}
     Workflow: {allOf: [{$ref: '#/components/schemas/WorkflowWrite'}, {type: object, required: [id, published_version, active, created_at, updated_at], properties: {id: {type: string}, published_version: {type: [integer, 'null'], minimum: 1}, active: {type: boolean}, created_at: {type: string, format: date-time}, updated_at: {type: string, format: date-time}}}]}
     WorkflowList: {type: object, required: [workflows], properties: {workflows: {type: array, items: {$ref: '#/components/schemas/Workflow'}}}}
-    Run: {type: object, required: [id, workflow_id, version, status, input, created_at, updated_at], properties: {id: {type: string}, workflow_id: {type: string}, version: {type: integer}, status: {type: string, enum: [queued, running, succeeded, failed, cancelled, uncertain]}, input: {type: object, additionalProperties: true}, error: {type: string}, created_at: {type: string, format: date-time}, updated_at: {type: string, format: date-time}}}
+    Run: {type: object, required: [id, workflow_id, version, status, input, created_at, updated_at], properties: {id: {type: string}, workflow_id: {type: string}, version: {type: integer, minimum: 0, description: Zero denotes an unversioned draft test}, test: {type: boolean}, status: {type: string, enum: [queued, running, succeeded, failed, cancelled, uncertain]}, input: {type: object, additionalProperties: true}, error: {type: string}, created_at: {type: string, format: date-time}, updated_at: {type: string, format: date-time}}}
     RunList: {type: object, required: [runs], properties: {runs: {type: array, items: {$ref: '#/components/schemas/Run'}}}}
     Step: {type: object, required: [node_id, status, input, output, attempt, created_at], properties: {node_id: {type: string}, status: {type: string, enum: [running, succeeded, failed, skipped]}, input: {}, output: {}, error: {type: string}, branch: {type: string, enum: ['true', 'false']}, attempt: {type: integer}, created_at: {type: string, format: date-time}}}
-    RunDetail: {type: object, required: [run, steps], properties: {run: {$ref: '#/components/schemas/Run'}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}}}
+    RunDetail: {type: object, required: [run, steps, node_types], properties: {run: {$ref: '#/components/schemas/Run'}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}, node_types: {type: object, additionalProperties: {type: string}}}}
     Credential: {type: object, required: [id, name, kind, created_at], properties: {id: {type: string}, name: {type: string}, kind: {type: string}, created_at: {type: string, format: date-time}}}
     PrivateCredential: {type: object, required: [id, name, kind, data], properties: {id: {type: string}, name: {type: string}, kind: {type: string}, data: {type: object, additionalProperties: true}}}
     CredentialCreate: {type: object, required: [name, kind, data], properties: {name: {type: string, maxLength: 200}, kind: {type: string, maxLength: 100}, data: {type: object, additionalProperties: true}}}
@@ -380,6 +390,6 @@ components:
     CatalogEntry: {type: object, required: [type, name, category, description, config_schema, input_ports, output_ports, input_schema, output_schema], properties: {type: {type: string}, name: {type: string}, category: {type: string}, description: {type: string}, config_schema: {type: object, additionalProperties: true}, input_ports: {type: array, items: {type: string}}, output_ports: {type: array, items: {type: string}}, input_schema: {type: object, additionalProperties: true}, output_schema: {type: object, additionalProperties: true}}}
     CatalogResponse: {type: object, required: [version, nodes], properties: {version: {type: integer, const: 1}, nodes: {type: array, items: {$ref: '#/components/schemas/CatalogEntry'}}}}
     EventResponse: {type: object, required: [run, duplicate], properties: {run: {oneOf: [{$ref: '#/components/schemas/Run'}, {type: 'null'}]}, duplicate: {type: boolean}}}
-    Job: {type: object, required: [id, lease_token, workflow_id, version, graph, input, steps], properties: {id: {type: string}, lease_token: {type: string}, workflow_id: {type: string}, version: {type: integer}, graph: {$ref: '#/components/schemas/Graph'}, input: {type: object, additionalProperties: true}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}}}
+    Job: {type: object, required: [id, lease_token, workflow_id, version, graph, input, steps, test], properties: {id: {type: string}, lease_token: {type: string}, workflow_id: {type: string}, version: {type: integer}, graph: {$ref: '#/components/schemas/Graph'}, input: {type: object, additionalProperties: true}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}, test: {type: boolean}}}
     StepEvent: {type: object, required: [lease_token, node_id, status, input, output], properties: {lease_token: {type: string}, node_id: {type: string}, status: {type: string, enum: [running, succeeded, failed, skipped]}, input: {}, output: {}, error: {type: string}, branch: {type: string, enum: ['', 'true', 'false']}, attempt: {type: integer}}}
     TriggerSnapshot: {type: object, required: [workflow_id, version, node, checkpoint], properties: {workflow_id: {type: string}, version: {type: integer}, node: {$ref: '#/components/schemas/Node'}, checkpoint: {}}}

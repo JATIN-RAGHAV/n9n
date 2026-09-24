@@ -179,6 +179,8 @@ pub struct Job {
     pub lease_token: String,
     pub workflow_id: String,
     pub version: i64,
+    #[serde(default)]
+    pub test: bool,
     pub graph: Graph,
     pub input: Value,
     pub steps: Vec<Step>,

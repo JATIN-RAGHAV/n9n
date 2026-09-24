@@ -123,7 +123,7 @@ func (s *Server) credentials(w http.ResponseWriter, r *http.Request, uid string,
 func (s *Server) credentialForJob(w http.ResponseWriter, runID, credID, lease string) {
 	var graphStr, ciphertext, name, kind string
 	var until string
-	e := s.db.QueryRow(`SELECT v.graph,r.lease_until,c.ciphertext,c.name,c.kind FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version JOIN workflows w ON w.id=r.workflow_id JOIN credentials c ON c.id=$1 AND c.user_id=w.user_id WHERE r.id=$2 AND r.status='running' AND r.lease_token=$3`, credID, runID, lease).Scan(&graphStr, &until, &ciphertext, &name, &kind)
+	e := s.db.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph),r.lease_until,c.ciphertext,c.name,c.kind FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version JOIN workflows w ON w.id=r.workflow_id JOIN credentials c ON c.id=$1 AND c.user_id=w.user_id WHERE r.id=$2 AND r.status='running' AND r.lease_token=$3`, credID, runID, lease).Scan(&graphStr, &until, &ciphertext, &name, &kind)
 	if e != nil || until < now() {
 		fail(w, 403, "invalid job lease or credential")
 		return

@@ -68,6 +68,7 @@ type Run struct {
 	ID         string `json:"id"`
 	WorkflowID string `json:"workflow_id"`
 	Version    int    `json:"version"`
+	Test       bool   `json:"test,omitempty"`
 	Status     string `json:"status"`
 	Input      any    `json:"input"`
 	Error      string `json:"error,omitempty"`
@@ -189,7 +190,7 @@ func migrate(db *sql.DB) error {
 	if err = tx.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil {
 		return err
 	}
-	if version > 1 {
+	if version > 4 {
 		return errors.New("database schema is newer than this server")
 	}
 	if version == 0 {
@@ -199,6 +200,39 @@ func migrate(db *sql.DB) error {
 			}
 		}
 		if _, err = tx.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(1,$1)`, now()); err != nil {
+			return err
+		}
+		version = 1
+	}
+	if version < 2 {
+		for _, q := range migration2 {
+			if _, err = tx.ExecContext(ctx, q); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(2,$1)`, now()); err != nil {
+			return err
+		}
+		version = 2
+	}
+	if version < 3 {
+		for _, q := range migration3 {
+			if _, err = tx.ExecContext(ctx, q); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(3,$1)`, now()); err != nil {
+			return err
+		}
+		version = 3
+	}
+	if version < 4 {
+		for _, q := range migration4 {
+			if _, err = tx.ExecContext(ctx, q); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(4,$1)`, now()); err != nil {
 			return err
 		}
 	}
@@ -248,6 +282,21 @@ var schema = []string{
 	`CREATE TABLE IF NOT EXISTS trigger_events(workflow_id TEXT NOT NULL,version INTEGER NOT NULL,event_id TEXT NOT NULL,run_id TEXT NOT NULL,PRIMARY KEY(workflow_id,version,event_id),FOREIGN KEY(workflow_id,version) REFERENCES versions(workflow_id,version) ON DELETE CASCADE)`,
 	`CREATE TABLE IF NOT EXISTS checkpoints(workflow_id TEXT NOT NULL,version INTEGER NOT NULL,value JSONB NOT NULL,PRIMARY KEY(workflow_id,version),FOREIGN KEY(workflow_id,version) REFERENCES versions(workflow_id,version) ON DELETE CASCADE)`,
 	`CREATE TABLE IF NOT EXISTS oauth_states(state_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,session_hash TEXT NOT NULL,expires_at TEXT NOT NULL)`,
+}
+
+var migration2 = []string{
+	`ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_workflow_id_version_fkey`,
+	`ALTER TABLE runs ADD COLUMN IF NOT EXISTS graph_snapshot JSONB`,
+	`ALTER TABLE runs ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT FALSE`,
+}
+
+var migration3 = []string{
+	`ALTER TABLE runs ADD CONSTRAINT runs_snapshot_mode_check CHECK ((is_test AND graph_snapshot IS NOT NULL AND version >= 0) OR (NOT is_test AND graph_snapshot IS NULL AND version > 0))`,
+}
+
+var migration4 = []string{
+	`CREATE OR REPLACE FUNCTION enforce_run_snapshot_version() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.is_test THEN IF NEW.graph_snapshot IS NULL OR NEW.version < 0 THEN RAISE EXCEPTION 'draft test run requires a nonnegative version and graph snapshot'; END IF; ELSE IF NEW.graph_snapshot IS NOT NULL OR NOT EXISTS (SELECT 1 FROM versions WHERE workflow_id=NEW.workflow_id AND version=NEW.version) THEN RAISE EXCEPTION 'published run must reference an existing graph version'; END IF; END IF; RETURN NEW; END; $$`,
+	`CREATE TRIGGER runs_snapshot_version_integrity BEFORE INSERT OR UPDATE OF workflow_id,version,is_test,graph_snapshot ON runs FOR EACH ROW EXECUTE FUNCTION enforce_run_snapshot_version()`,
 }
 
 func id() string { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }

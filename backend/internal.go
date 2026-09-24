@@ -114,7 +114,7 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 		}
 		defer tx.Rollback()
 		var graphStr string
-		e = tx.QueryRow(`SELECT v.graph FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1 AND r.status='running' AND r.lease_token=$2 AND r.lease_until>$3 FOR UPDATE OF r`, runID, a.LeaseToken, now()).Scan(&graphStr)
+		e = tx.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1 AND r.status='running' AND r.lease_token=$2 AND r.lease_until>$3 FOR UPDATE OF r`, runID, a.LeaseToken, now()).Scan(&graphStr)
 		if e != nil {
 			fail(w, 409, "lease expired")
 			return
@@ -192,7 +192,7 @@ func (s *Server) claim(runner string) (any, error) {
 	rows.Close()
 	for _, rid := range expired {
 		var graphStr string
-		e = tx.QueryRow(`SELECT v.graph FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1`, rid).Scan(&graphStr)
+		e = tx.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1`, rid).Scan(&graphStr)
 		if e != nil {
 			return nil, e
 		}
@@ -242,7 +242,8 @@ func (s *Server) claim(runner string) (any, error) {
 	}
 	var rid, wid, graphStr, inputStr string
 	var version int
-	e = tx.QueryRow(`SELECT r.id,r.workflow_id,r.version,v.graph,r.input FROM runs r JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.status='queued' ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED`).Scan(&rid, &wid, &version, &graphStr, &inputStr)
+	var isTest bool
+	e = tx.QueryRow(`SELECT r.id,r.workflow_id,r.version,COALESCE(r.graph_snapshot,v.graph),r.input,r.is_test FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.status='queued' ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED`).Scan(&rid, &wid, &version, &graphStr, &inputStr, &isTest)
 	if errors.Is(e, sql.ErrNoRows) {
 		return nil, tx.Commit()
 	}
@@ -277,7 +278,7 @@ func (s *Server) claim(runner string) (any, error) {
 	if e = tx.Commit(); e != nil {
 		return nil, e
 	}
-	return map[string]any{"id": rid, "lease_token": lease, "workflow_id": wid, "version": version, "graph": graph, "input": input, "steps": steps}, nil
+	return map[string]any{"id": rid, "lease_token": lease, "workflow_id": wid, "version": version, "test": isTest, "graph": graph, "input": input, "steps": steps}, nil
 }
 func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []string) {
 	if len(p) == 0 && r.Method == "GET" {

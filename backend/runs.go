@@ -17,17 +17,26 @@ func queueRun(db *sql.DB, wid string, version int, input any) (Run, error) {
 	}
 	return Run{ID: id, WorkflowID: wid, Version: version, Status: "queued", Input: input, CreatedAt: t, UpdatedAt: t}, nil
 }
+func queueTestRun(tx *sql.Tx, wid string, version int, graph Graph, input any) (Run, error) {
+	id := id()
+	t := now()
+	_, err := tx.Exec(`INSERT INTO runs(id,workflow_id,version,status,input,graph_snapshot,is_test,created_at,updated_at) VALUES($1,$2,$3,'queued',$4,$5,TRUE,$6,$6)`, id, wid, version, jsonText(input), jsonText(graph), t)
+	if err != nil {
+		return Run{}, err
+	}
+	return Run{ID: id, WorkflowID: wid, Version: version, Test: true, Status: "queued", Input: input, CreatedAt: t, UpdatedAt: t}, nil
+}
 func getRun(q querier, id string) (Run, error) {
 	var x Run
 	var input string
-	e := q.QueryRow(`SELECT id,workflow_id,version,status,input,error,created_at,updated_at FROM runs WHERE id=$1`, id).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
+	e := q.QueryRow(`SELECT id,workflow_id,version,is_test,status,input,error,created_at,updated_at FROM runs WHERE id=$1`, id).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Test, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
 	_ = json.Unmarshal([]byte(input), &x.Input)
 	return x, e
 }
 func (s *Server) ownedRun(id, uid string) (Run, error) {
 	var x Run
 	var input string
-	e := s.db.QueryRow(`SELECT r.id,r.workflow_id,r.version,r.status,r.input,r.error,r.created_at,r.updated_at FROM runs r JOIN workflows w ON w.id=r.workflow_id WHERE r.id=$1 AND w.user_id=$2`, id, uid).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
+	e := s.db.QueryRow(`SELECT r.id,r.workflow_id,r.version,r.is_test,r.status,r.input,r.error,r.created_at,r.updated_at FROM runs r JOIN workflows w ON w.id=r.workflow_id WHERE r.id=$1 AND w.user_id=$2`, id, uid).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Test, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
 	_ = json.Unmarshal([]byte(input), &x.Input)
 	return x, e
 }
@@ -90,7 +99,22 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []st
 				steps = append(steps, t)
 			}
 		}
-		write(w, 200, map[string]any{"run": x, "steps": steps})
+		var graphText string
+		e = s.db.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1`, x.ID).Scan(&graphText)
+		if e != nil {
+			fail(w, 500, "workflow snapshot unavailable")
+			return
+		}
+		var graph Graph
+		if e = json.Unmarshal([]byte(graphText), &graph); e != nil {
+			fail(w, 500, "invalid workflow snapshot")
+			return
+		}
+		nodeTypes := map[string]string{}
+		for _, node := range graph.Nodes {
+			nodeTypes[node.ID] = node.Type
+		}
+		write(w, 200, map[string]any{"run": x, "steps": steps, "node_types": nodeTypes})
 		return
 	}
 	if len(p) == 2 && p[1] == "cancel" && r.Method == "POST" {

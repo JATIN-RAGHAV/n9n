@@ -152,6 +152,68 @@ func (s *Server) workflows(w http.ResponseWriter, r *http.Request, uid string, p
 	}
 	if len(p) == 2 && r.Method == "POST" {
 		switch p[1] {
+		case "test":
+			tx, err := s.db.Begin()
+			if err != nil {
+				fail(w, 500, "database error")
+				return
+			}
+			defer tx.Rollback()
+			var draftText string
+			var published sql.NullInt64
+			if err = tx.QueryRow(`SELECT draft,published_version FROM workflows WHERE id=$1 AND user_id=$2 FOR SHARE`, x.ID, uid).Scan(&draftText, &published); err != nil {
+				fail(w, 404, "workflow not found")
+				return
+			}
+			var graph Graph
+			if err = json.Unmarshal([]byte(draftText), &graph); err != nil {
+				fail(w, 500, "invalid stored workflow")
+				return
+			}
+			if err = validatePublish(graph); err != nil {
+				fail(w, 400, err.Error())
+				return
+			}
+			var request struct {
+				Input map[string]any `json:"input"`
+			}
+			if err = decode(r, &request); err != nil {
+				fail(w, 400, err.Error())
+				return
+			}
+			input := request.Input
+			if input == nil {
+				input = map[string]any{}
+			}
+			if !withinJSONDepth(input) {
+				fail(w, 400, "run input exceeds nesting limit of 32")
+				return
+			}
+			for _, node := range graph.Nodes {
+				if node.CredentialID == "" {
+					continue
+				}
+				var count int
+				if err = tx.QueryRow(`SELECT count(*) FROM credentials WHERE id=$1 AND user_id=$2`, node.CredentialID, uid).Scan(&count); err != nil || count == 0 {
+					fail(w, 400, "credential not found: "+node.CredentialID)
+					return
+				}
+			}
+			version := 0
+			if published.Valid {
+				version = int(published.Int64)
+			}
+			run, err := queueTestRun(tx, x.ID, version, graph, input)
+			if err != nil {
+				fail(w, 500, "database error")
+				return
+			}
+			if err = tx.Commit(); err != nil {
+				fail(w, 500, "database error")
+				return
+			}
+			write(w, 200, map[string]any{"run": run})
+			return
 		case "publish":
 			tx, e := s.db.Begin()
 			if e != nil {
