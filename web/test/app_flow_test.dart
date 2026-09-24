@@ -86,6 +86,8 @@ void main() {
       initialUri: Uri.parse('http://localhost/#/workflows/flow-ports'),
     ));
     await tester.pumpAndSettle();
+    expect(Theme.of(tester.element(find.text('NODE LIBRARY'))).brightness,
+        Brightness.dark);
 
     Future<void> tapOuter(String id, String port,
         {required bool output}) async {
@@ -98,6 +100,16 @@ void main() {
 
     await tapOuter('trigger', 'out', output: true);
     await tapOuter('branch', 'in', output: false);
+    expect(find.text('Unsaved changes'), findsOneWidget);
+    await tester.tap(find.byTooltip('Switch to light theme'));
+    await tester.pumpAndSettle();
+    expect(Theme.of(tester.element(find.text('NODE LIBRARY'))).brightness,
+        Brightness.light);
+    expect(find.text('Unsaved changes'), findsOneWidget);
+    await tester.tap(find.byTooltip('Switch to dark theme'));
+    await tester.pumpAndSettle();
+    expect(Theme.of(tester.element(find.text('NODE LIBRARY'))).brightness,
+        Brightness.dark);
     await tapOuter('branch', 'true', output: true);
     await tapOuter('yes', 'in', output: false);
     await tapOuter('branch', 'false', output: true);
@@ -193,6 +205,13 @@ void main() {
     await tester.pumpWidget(N9nApp(api: Api(client: client)));
     await tester.pumpAndSettle();
     expect(find.text('Welcome back'), findsOneWidget);
+    await tester.tap(find.byTooltip('Switch to light theme'));
+    await tester.pumpAndSettle();
+    expect(Theme.of(tester.element(find.text('Welcome back'))).brightness,
+        Brightness.light);
+    await tester.tap(find.byTooltip('Switch to dark theme'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('New here? Create an account'));
     await tester.tap(find.text('New here? Create an account'));
     await tester.enterText(find.byType(TextField).at(0), 'me@example.com');
     await tester.enterText(find.byType(TextField).at(1), 'password123');

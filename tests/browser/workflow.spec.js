@@ -50,6 +50,11 @@ test('Flutter Wasm UI builds and runs a workflow across a deep link and mobile m
   await page.getByText(/^Set fields$/i).first().click();
   await expect(page.getByText('Unsaved changes')).toBeVisible();
 
+  await page.getByRole('button', { name: 'Switch to light theme' }).click();
+  await expect(page.getByText('Unsaved changes')).toBeVisible();
+  await page.getByRole('button', { name: 'Switch to dark theme' }).click();
+  await expect(page).toHaveURL(/\/workflows\/[0-9a-f]+/);
+
   await page.getByRole('button', { name: 'Connect out output' }).first().click();
   await expect(page.getByText('Now choose an input port')).toBeVisible();
   await page.getByRole('button', { name: 'Connect input' }).click();

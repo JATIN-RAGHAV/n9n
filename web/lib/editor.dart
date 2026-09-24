@@ -27,6 +27,9 @@ class _EditorScreenState extends State<EditorScreen> {
   String paletteSearch = '';
   final undo = <WorkflowDraft>[], redo = <WorkflowDraft>[];
   final transform = TransformationController();
+  final canvasKey = GlobalKey();
+  Offset? dragPoint;
+  String? hoverTarget;
   int sequence = 0;
 
   @override
@@ -165,6 +168,66 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
+  Offset _sceneFromGlobal(Offset global) {
+    final box = canvasKey.currentContext!.findRenderObject() as RenderBox;
+    return transform.toScene(box.globalToLocal(global));
+  }
+
+  String? _inputAt(Offset point) {
+    for (final node in workflow!.draft.nodes.reversed) {
+      if (triggerTypes.contains(node.type)) continue;
+      if ((Offset(node.x, node.y + 57) - point).distance <= 29) {
+        return node.id;
+      }
+    }
+    return null;
+  }
+
+  void _startConnectionDrag(String nodeId, String port) {
+    final node = workflow!.draft.nodes.firstWhere((n) => n.id == nodeId);
+    setState(() {
+      pendingSource = nodeId;
+      pendingPort = port;
+      selectedId = nodeId;
+      dragPoint = Offset(
+          node.x + 216,
+          node.y +
+              (port == 'false'
+                  ? 93
+                  : port == 'true'
+                      ? 70
+                      : 57));
+      hoverTarget = null;
+    });
+  }
+
+  void _updateConnectionDrag(Offset global) {
+    final point = _sceneFromGlobal(global);
+    setState(() {
+      dragPoint = point;
+      hoverTarget = _inputAt(point);
+    });
+  }
+
+  void _finishConnectionDrag() {
+    if (dragPoint == null) return;
+    final target = hoverTarget;
+    setState(() {
+      dragPoint = null;
+      hoverTarget = null;
+    });
+    if (target != null) connect(target);
+  }
+
+  void _cancelConnectionDrag() {
+    setState(() {
+      dragPoint = null;
+      hoverTarget = null;
+      pendingSource = null;
+      pendingPort = null;
+    });
+  }
+
   void removeNode(WorkflowNode node) {
     edit((draft) {
       draft.nodes.removeWhere((n) => n.id == node.id);
@@ -237,32 +300,33 @@ class _EditorScreenState extends State<EditorScreen> {
         context: context,
         builder: (context) => StatefulBuilder(
             builder: (context, setDialog) => AlertDialog(
-                    title: const Text('Run workflow'),
+                    title: Text('Run workflow'),
                     content: SizedBox(
                         width: 450,
                         child: Column(
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text(
+                              Text(
                                   'Input JSON available to nodes as {{input.FIELD}}.',
-                                  style: TextStyle(color: muted)),
+                                  style:
+                                      TextStyle(color: context.palette.muted)),
                               const SizedBox(height: 16),
                               TextField(
                                   controller: input,
                                   maxLines: 8,
-                                  style:
-                                      const TextStyle(fontFamily: 'monospace'),
+                                  style: TextStyle(fontFamily: 'monospace'),
                                   decoration: const InputDecoration(
                                       labelText: 'Input JSON')),
                               if (localError != null)
                                 Text(localError!,
-                                    style: const TextStyle(color: coral))
+                                    style: TextStyle(
+                                        color: context.palette.accentText))
                             ])),
                     actions: [
                       TextButton(
                           onPressed: () => Navigator.pop(context),
-                          child: const Text('Cancel')),
+                          child: Text('Cancel')),
                       FilledButton(
                           onPressed: () {
                             try {
@@ -278,7 +342,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                   localError = 'Enter a valid JSON object.');
                             }
                           },
-                          child: const Text('Start run'))
+                          child: Text('Start run'))
                     ])));
     disposeDialogController(input);
     if (data == null) return;
@@ -295,7 +359,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final name = await showDialog<String>(
         context: context,
         builder: (context) => AlertDialog(
-                title: const Text('Rename workflow'),
+                title: Text('Rename workflow'),
                 content: TextField(
                     controller: controller,
                     autofocus: true,
@@ -304,10 +368,10 @@ class _EditorScreenState extends State<EditorScreen> {
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel')),
+                      child: Text('Cancel')),
                   FilledButton(
                       onPressed: () => Navigator.pop(context, controller.text),
-                      child: const Text('Rename'))
+                      child: Text('Rename'))
                 ]));
     disposeDialogController(controller);
     if (name != null && name.trim().isNotEmpty) {
@@ -327,12 +391,12 @@ class _EditorScreenState extends State<EditorScreen> {
               child: ErrorCard(error!, load)));
     }
     if (workflow == null) {
-      return const Center(child: CircularProgressIndicator());
+      return Center(child: CircularProgressIndicator());
     }
     final width = MediaQuery.sizeOf(context).width;
     return Column(children: [
       Container(
-          color: panel,
+          color: context.palette.panel,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
           child: Wrap(
               spacing: 10,
@@ -341,20 +405,21 @@ class _EditorScreenState extends State<EditorScreen> {
               children: [
                 IconButton(
                     onPressed: () => widget.onNavigate('/workflows'),
-                    icon: const Icon(Icons.arrow_back),
+                    icon: Icon(Icons.arrow_back),
                     tooltip: 'All workflows'),
                 InkWell(
                     onTap: editName,
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       Text(workflow!.name,
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 18, fontWeight: FontWeight.w800)),
                       const SizedBox(width: 5),
-                      const Icon(Icons.edit_outlined, size: 15)
+                      Icon(Icons.edit_outlined, size: 15)
                     ])),
                 if (dirty)
-                  const Text('Unsaved changes',
-                      style: TextStyle(color: coral, fontSize: 12)),
+                  Text('Unsaved changes',
+                      style: TextStyle(
+                          color: context.palette.accentText, fontSize: 12)),
                 StatusPill(
                     workflow!.active
                         ? 'Active'
@@ -366,17 +431,16 @@ class _EditorScreenState extends State<EditorScreen> {
                 IconButton(
                     onPressed: undo.isEmpty ? null : undoEdit,
                     tooltip: 'Undo',
-                    icon: const Icon(Icons.undo)),
+                    icon: Icon(Icons.undo)),
                 IconButton(
                     onPressed: redo.isEmpty ? null : redoEdit,
                     tooltip: 'Redo',
-                    icon: const Icon(Icons.redo)),
+                    icon: Icon(Icons.redo)),
                 OutlinedButton(
                     onPressed: busy || !dirty ? null : save,
-                    child: const Text('Save draft')),
+                    child: Text('Save draft')),
                 OutlinedButton(
-                    onPressed: busy ? null : publish,
-                    child: const Text('Publish')),
+                    onPressed: busy ? null : publish, child: Text('Publish')),
                 if (workflow!.publishedVersion != null)
                   TextButton.icon(
                       onPressed:
@@ -390,8 +454,8 @@ class _EditorScreenState extends State<EditorScreen> {
                         ? null
                         : runNow,
                     style: FilledButton.styleFrom(backgroundColor: pine),
-                    icon: const Icon(Icons.play_arrow),
-                    label: const Text('Run now')),
+                    icon: Icon(Icons.play_arrow),
+                    label: Text('Run now')),
               ])),
       Expanded(
           child: IgnorePointer(
@@ -424,12 +488,12 @@ class _EditorScreenState extends State<EditorScreen> {
           ]
         : catalog;
     return Container(
-        color: panel,
+        color: context.palette.panel,
         child: ListView(padding: const EdgeInsets.all(16), children: [
-          const Text('NODE LIBRARY', style: fieldLabel),
+          Text('NODE LIBRARY', style: fieldLabel),
           const SizedBox(height: 8),
-          const Text('Drag onto canvas',
-              style: TextStyle(fontSize: 12, color: muted)),
+          Text('Drag onto canvas',
+              style: TextStyle(fontSize: 12, color: context.palette.muted)),
           const SizedBox(height: 12),
           TextField(
               onChanged: (value) =>
@@ -468,11 +532,11 @@ class _EditorScreenState extends State<EditorScreen> {
           ],
           const Divider(),
           const SizedBox(height: 12),
-          const Text('TIP', style: fieldLabel),
+          Text('TIP', style: fieldLabel),
           const SizedBox(height: 7),
-          const Text(
-              'Click an output, then an input to connect nodes. Click an edge to remove it.',
-              style: TextStyle(fontSize: 12, color: muted)),
+          Text(
+              'Drag an output circle to an input circle, or click both circles. Select a node for a Connect to menu. Click an edge to remove it.',
+              style: TextStyle(fontSize: 12, color: context.palette.muted)),
         ]));
   }
 
@@ -480,8 +544,9 @@ class _EditorScreenState extends State<EditorScreen> {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(11),
       decoration: BoxDecoration(
-          color: dragging ? panelRaised : canvas,
-          border: Border.all(color: line),
+          color:
+              dragging ? context.palette.panelRaised : context.palette.canvas,
+          border: Border.all(color: context.palette.line),
           borderRadius: BorderRadius.circular(10)),
       child: Row(children: [
         Icon(iconFor('${entry['type']}'),
@@ -490,9 +555,8 @@ class _EditorScreenState extends State<EditorScreen> {
         const SizedBox(width: 9),
         Expanded(
             child: Text('${entry['name'] ?? nodeLabel('${entry['type']}')}',
-                style: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w700))),
-        const Icon(Icons.drag_indicator, size: 15, color: muted)
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+        Icon(Icons.drag_indicator, size: 15, color: context.palette.muted)
       ]));
   Future<void> _mobileAddNode() async {
     final entries = catalog.isEmpty
@@ -535,7 +599,8 @@ class _EditorScreenState extends State<EditorScreen> {
             addNode(details.data, transform.toScene(local));
           },
           builder: (context, candidates, _) => Container(
-              color: canvas,
+              key: canvasKey,
+              color: context.palette.canvas,
               child: Stack(children: [
                 InteractiveViewer(
                     transformationController: transform,
@@ -553,8 +618,18 @@ class _EditorScreenState extends State<EditorScreen> {
                                   onTapDown: (details) =>
                                       _tapCanvas(details.localPosition),
                                   child: CustomPaint(
-                                      painter:
-                                          _GraphPainter(workflow!.draft)))),
+                                      painter: _GraphPainter(
+                                          workflow!.draft, context.palette)))),
+                          if (dragPoint != null && pendingSource != null)
+                            Positioned.fill(
+                                child: IgnorePointer(
+                                    child: CustomPaint(
+                                        painter: _ConnectionPreviewPainter(
+                                            workflow!.draft,
+                                            pendingSource!,
+                                            pendingPort!,
+                                            dragPoint!,
+                                            hoverTarget)))),
                           for (final node in workflow!.draft.nodes)
                             Positioned(
                                 left: node.x - 14,
@@ -568,14 +643,16 @@ class _EditorScreenState extends State<EditorScreen> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 11, vertical: 7),
                         decoration: BoxDecoration(
-                            color: panel,
+                            color: context.palette.panel,
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: line)),
+                            border: Border.all(color: context.palette.line)),
                         child: Text(
-                            pendingSource == null
-                                ? 'Drag to pan · Scroll to zoom'
-                                : 'Now choose an input port',
-                            style: const TextStyle(
+                            dragPoint != null
+                                ? 'Release on input'
+                                : pendingSource == null
+                                    ? 'Drag output → input'
+                                    : 'Now choose an input port',
+                            style: TextStyle(
                                 fontSize: 12,
                                 color: pine,
                                 fontWeight: FontWeight.w700)))),
@@ -586,30 +663,30 @@ class _EditorScreenState extends State<EditorScreen> {
                       child: FilledButton.icon(
                           onPressed: _mobileAddNode,
                           style: FilledButton.styleFrom(backgroundColor: pine),
-                          icon: const Icon(Icons.add),
-                          label: const Text('Add node'))),
+                          icon: Icon(Icons.add),
+                          label: Text('Add node'))),
                 Positioned(
                     bottom: 14,
                     right: 14,
                     child: Container(
                         decoration: BoxDecoration(
-                            color: panel,
+                            color: context.palette.panel,
                             borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: line)),
+                            border: Border.all(color: context.palette.line)),
                         child: Row(mainAxisSize: MainAxisSize.min, children: [
                           IconButton(
                               tooltip: 'Zoom out',
                               onPressed: () => _zoom(.8),
-                              icon: const Icon(Icons.remove)),
+                              icon: Icon(Icons.remove)),
                           IconButton(
                               tooltip: 'Reset view',
                               onPressed: () => setState(() => transform.value =
                                   transform.value.clone()..setIdentity()),
-                              icon: const Icon(Icons.center_focus_strong)),
+                              icon: Icon(Icons.center_focus_strong)),
                           IconButton(
                               tooltip: 'Zoom in',
                               onPressed: () => _zoom(1.25),
-                              icon: const Icon(Icons.add))
+                              icon: Icon(Icons.add))
                         ]))),
               ]))));
   void _zoom(double factor) {
@@ -659,8 +736,11 @@ class _EditorScreenState extends State<EditorScreen> {
     // Stack only hit-tests within its own bounds. Keep the entire port target
     // inside this larger wrapper while the visible card stays at node.x/y.
     return GestureDetector(
-        onPanStart: (_) => snapshot(),
+        onPanStart: (_) {
+          if (dragPoint == null) snapshot();
+        },
         onPanUpdate: (details) {
+          if (dragPoint != null) return;
           final scale = transform.value.getMaxScaleOnAxis();
           setState(() {
             node.x = (node.x + details.delta.dx / scale).clamp(0, 2180);
@@ -679,10 +759,10 @@ class _EditorScreenState extends State<EditorScreen> {
                       width: 216,
                       height: condition ? 122 : 102,
                       decoration: BoxDecoration(
-                          color: panel,
+                          color: context.palette.panel,
                           borderRadius: BorderRadius.circular(13),
                           border: Border.all(
-                              color: chosen ? pine : line,
+                              color: chosen ? pine : context.palette.line,
                               width: chosen ? 2 : 1),
                           boxShadow: const [
                             BoxShadow(
@@ -705,8 +785,8 @@ class _EditorScreenState extends State<EditorScreen> {
                                           decoration: BoxDecoration(
                                               color: triggerTypes
                                                       .contains(node.type)
-                                                  ? errorBg
-                                                  : panelRaised,
+                                                  ? context.palette.errorBg
+                                                  : context.palette.panelRaised,
                                               borderRadius:
                                                   BorderRadius.circular(8)),
                                           child: Icon(iconFor(node.type),
@@ -719,12 +799,13 @@ class _EditorScreenState extends State<EditorScreen> {
                                       Expanded(
                                           child: Text(nodeLabel(node.type),
                                               overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
+                                              style: TextStyle(
                                                   fontSize: 13,
                                                   fontWeight:
                                                       FontWeight.w800))),
-                                      const Icon(Icons.drag_indicator,
-                                          color: muted, size: 16)
+                                      Icon(Icons.drag_indicator,
+                                          color: context.palette.muted,
+                                          size: 16)
                                     ]),
                                     const SizedBox(height: 10),
                                     Text(
@@ -733,8 +814,9 @@ class _EditorScreenState extends State<EditorScreen> {
                                             : triggerTypes.contains(node.type)
                                                 ? 'Starts your workflow'
                                                 : 'Configure in the right panel',
-                                        style: const TextStyle(
-                                            color: muted, fontSize: 10))
+                                        style: TextStyle(
+                                            color: context.palette.muted,
+                                            fontSize: 10))
                                   ]))))),
               if (!triggerTypes.contains(node.type))
                 Positioned(
@@ -762,46 +844,118 @@ class _EditorScreenState extends State<EditorScreen> {
 
   Widget _port(bool output, String nodeId, String port) => Tooltip(
       message: output ? 'Connect $port output' : 'Connect input',
-      child: GestureDetector(
-          key: ValueKey('port:$nodeId:$port'),
-          behavior: HitTestBehavior.opaque,
-          onTap: () {
-            if (output) {
-              setState(() {
-                pendingSource = nodeId;
-                pendingPort = port;
-                selectedId = nodeId;
-              });
-            } else {
-              connect(nodeId);
-            }
-          },
-          child: SizedBox(
-              width: 28,
-              height: 28,
-              child: Center(
-                  child: Container(
-                      width: 18,
-                      height: 18,
-                      decoration: BoxDecoration(
-                          color: pendingSource == nodeId && pendingPort == port
-                              ? coral
-                              : pine,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: panel, width: 3)))))));
+      child: Listener(
+          onPointerMove: output
+              ? (event) {
+                  if (dragPoint != null) _updateConnectionDrag(event.position);
+                }
+              : null,
+          onPointerUp: output
+              ? (event) {
+                  if (dragPoint != null) {
+                    _updateConnectionDrag(event.position);
+                    _finishConnectionDrag();
+                  }
+                }
+              : null,
+          onPointerCancel: output ? (_) => _cancelConnectionDrag() : null,
+          child: GestureDetector(
+              key: ValueKey('port:$nodeId:$port'),
+              behavior: HitTestBehavior.opaque,
+              onPanStart: output
+                  ? (details) {
+                      _startConnectionDrag(nodeId, port);
+                      _updateConnectionDrag(details.globalPosition);
+                    }
+                  : null,
+              onPanUpdate: output
+                  ? (details) => _updateConnectionDrag(details.globalPosition)
+                  : null,
+              onPanEnd: output ? (_) {} : null,
+              onPanCancel: output ? _cancelConnectionDrag : null,
+              onTap: () {
+                if (output) {
+                  setState(() {
+                    pendingSource = nodeId;
+                    pendingPort = port;
+                    selectedId = nodeId;
+                  });
+                } else {
+                  connect(nodeId);
+                }
+              },
+              child: SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: Center(
+                      child: Container(
+                          width: 18,
+                          height: 18,
+                          decoration: BoxDecoration(
+                              color: hoverTarget == nodeId ||
+                                      pendingSource == nodeId &&
+                                          pendingPort == port
+                                  ? coral
+                                  : pine,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                  color: context.palette.panel,
+                                  width: 3))))))));
+  Widget _connectMenu(WorkflowNode source, String port) {
+    final targets = workflow!.draft.nodes
+        .where((node) =>
+            validateConnection(workflow!.draft, source.id, node.id, port) ==
+            null)
+        .toList();
+    return PopupMenuButton<String>(
+        tooltip: 'Connect $port output to node',
+        onSelected: (target) {
+          setState(() {
+            pendingSource = source.id;
+            pendingPort = port;
+          });
+          connect(target);
+        },
+        itemBuilder: (context) => targets.isEmpty
+            ? [
+                const PopupMenuItem<String>(
+                    enabled: false, child: Text('No available targets'))
+              ]
+            : targets
+                .map((node) => PopupMenuItem<String>(
+                    value: node.id,
+                    child: Text('${nodeLabel(node.type)} · ${node.id}')))
+                .toList(),
+        child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.alt_route, size: 18, color: pine),
+              const SizedBox(width: 6),
+              Flexible(
+                  child: Text(
+                      port == 'out'
+                          ? 'Connect to node'
+                          : 'Connect $port to node',
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: const TextStyle(fontWeight: FontWeight.w700)))
+            ])));
+  }
+
   Widget _runsStrip() => Container(
         height: 64,
-        color: panel,
+        color: context.palette.panel,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Row(children: [
-          const Icon(Icons.history, size: 19, color: pine),
+          Icon(Icons.history, size: 19, color: pine),
           const SizedBox(width: 7),
-          const Text('Runs', style: TextStyle(fontWeight: FontWeight.w800)),
+          Text('Runs', style: TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(width: 14),
           Expanded(
               child: runs.isEmpty
-                  ? const Text('No runs yet',
-                      style: TextStyle(color: muted, fontSize: 12))
+                  ? Text('No runs yet',
+                      style:
+                          TextStyle(color: context.palette.muted, fontSize: 12))
                   : ListView(
                       scrollDirection: Axis.horizontal,
                       children: runs
@@ -823,15 +977,15 @@ class _EditorScreenState extends State<EditorScreen> {
                 final items = await widget.api.runs(workflowId: workflow!.id);
                 if (mounted) setState(() => runs = items);
               },
-              icon: const Icon(Icons.refresh, size: 19)),
+              icon: Icon(Icons.refresh, size: 19)),
         ]),
       );
   Widget _inspector() {
     final node = selected;
     return Container(
-        color: panel,
+        color: context.palette.panel,
         child: node == null
-            ? const Center(
+            ? Center(
                 child: Padding(
                     padding: EdgeInsets.all(24),
                     child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -841,7 +995,7 @@ class _EditorScreenState extends State<EditorScreen> {
                           style: TextStyle(fontWeight: FontWeight.w800)),
                       SizedBox(height: 5),
                       Text('Edit its settings here.',
-                          style: TextStyle(color: muted))
+                          style: TextStyle(color: context.palette.muted))
                     ])))
             : ListView(
                 key: ValueKey('${node.id}-$configRevision'),
@@ -852,25 +1006,35 @@ class _EditorScreenState extends State<EditorScreen> {
                       const SizedBox(width: 9),
                       Expanded(
                           child: Text(nodeLabel(node.type),
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 18, fontWeight: FontWeight.w800))),
                       IconButton(
                           tooltip: 'Delete node',
                           onPressed: () => removeNode(node),
-                          icon: const Icon(Icons.delete_outline, color: coral))
+                          icon: Icon(Icons.delete_outline,
+                              color: context.palette.accentText))
                     ]),
                     Text('ID: ${node.id}',
-                        style: const TextStyle(fontSize: 10, color: muted)),
+                        style: TextStyle(
+                            fontSize: 10, color: context.palette.muted)),
+                    const SizedBox(height: 8),
+                    Wrap(spacing: 8, children: [
+                      if (node.type == 'condition') ...[
+                        _connectMenu(node, 'true'),
+                        _connectMenu(node, 'false'),
+                      ] else
+                        _connectMenu(node, 'out'),
+                    ]),
                     const SizedBox(height: 18),
                     if (credentialTypes.contains(node.type)) ...[
-                      const Text('GMAIL CREDENTIAL', style: fieldLabel),
+                      Text('GMAIL CREDENTIAL', style: fieldLabel),
                       const SizedBox(height: 6),
                       DropdownButtonFormField<String>(
                           initialValue: credentials
                                   .any((c) => c['id'] == node.credentialId)
                               ? node.credentialId
                               : null,
-                          hint: const Text('Choose credential'),
+                          hint: Text('Choose credential'),
                           items: credentials
                               .map((c) => DropdownMenuItem(
                                   value: '${c['id']}',
@@ -881,28 +1045,29 @@ class _EditorScreenState extends State<EditorScreen> {
                       const SizedBox(height: 7),
                       TextButton(
                           onPressed: () => widget.onNavigate('/credentials'),
-                          child: const Text('Manage credentials →')),
+                          child: Text('Manage credentials →')),
                       const SizedBox(height: 12),
                     ],
                     ..._fields(node),
                     const SizedBox(height: 12),
                     OutlinedButton.icon(
                         onPressed: () => _jsonDialog(node),
-                        icon: const Icon(Icons.data_object),
-                        label: const Text('Edit raw JSON')),
+                        icon: Icon(Icons.data_object),
+                        label: Text('Edit raw JSON')),
                     const SizedBox(height: 10),
                     if (node.type == 'webhook_trigger' &&
                         workflow!.publishedVersion != null)
                       SelectableText('Webhook: /api/hooks/${workflow!.id}',
-                          style: const TextStyle(fontSize: 12, color: pine)),
+                          style: TextStyle(fontSize: 12, color: pine)),
                     const SizedBox(height: 8),
-                    const Text(
+                    Text(
                         'Mappings: {{input.field}} uses this node’s incoming data; {{nodes.NODE_ID.field}} reads an upstream result.',
-                        style: TextStyle(color: muted, fontSize: 11)),
+                        style: TextStyle(
+                            color: context.palette.muted, fontSize: 11)),
                     TextButton.icon(
                         onPressed: () => _insertMapping(node),
-                        icon: const Icon(Icons.auto_fix_high, size: 17),
-                        label: const Text('Browse available mappings')),
+                        icon: Icon(Icons.auto_fix_high, size: 17),
+                        label: Text('Browse available mappings')),
                   ]));
   }
 
@@ -980,18 +1145,18 @@ class _EditorScreenState extends State<EditorScreen> {
                     .toList(),
                 onChanged: (v) => edit((_) => node.config['operator'] = v))));
         field('right', 'Right value', hint: '5, true, or text', typed: true);
-        result.add(const Padding(
+        result.add(Padding(
             padding: EdgeInsets.only(bottom: 12),
             child: Text(
                 'Numbers, true/false, and JSON values keep their types. Other text remains a string.',
-                style: TextStyle(fontSize: 11, color: muted))));
+                style: TextStyle(fontSize: 11, color: context.palette.muted))));
       case 'send_email':
         field('to', 'To', hint: 'person@example.com');
         field('subject', 'Subject');
         field('body', 'Body', maxLines: 6);
       default:
-        result.add(const Text('This trigger needs no configuration.',
-            style: TextStyle(color: muted)));
+        result.add(Text('This trigger needs no configuration.',
+            style: TextStyle(color: context.palette.muted)));
     }
     return result;
   }
@@ -1010,14 +1175,14 @@ class _EditorScreenState extends State<EditorScreen> {
                 Expanded(
                     child: Text('${entry.key}: ${entry.value}',
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 12))),
+                        style: TextStyle(fontSize: 12))),
                 IconButton(
                     tooltip: 'Remove ${entry.key}',
                     onPressed: () => edit((_) {
                           map.remove(entry.key);
                           node.config[key] = map;
                         }),
-                    icon: const Icon(Icons.close, size: 16))
+                    icon: Icon(Icons.close, size: 16))
               ]))),
           TextButton.icon(
               onPressed: () async {
@@ -1043,11 +1208,11 @@ class _EditorScreenState extends State<EditorScreen> {
                             actions: [
                               TextButton(
                                   onPressed: () => Navigator.pop(context),
-                                  child: const Text('Cancel')),
+                                  child: Text('Cancel')),
                               FilledButton(
                                   onPressed: () => Navigator.pop(
                                       context, [name.text, value.text]),
-                                  child: const Text('Add'))
+                                  child: Text('Add'))
                             ]));
                 disposeDialogController(name);
                 disposeDialogController(value);
@@ -1059,7 +1224,7 @@ class _EditorScreenState extends State<EditorScreen> {
                   });
                 }
               },
-              icon: const Icon(Icons.add, size: 18),
+              icon: Icon(Icons.add, size: 18),
               label: Text(action))
         ]));
   }
@@ -1080,18 +1245,19 @@ class _EditorScreenState extends State<EditorScreen> {
                           TextField(
                               controller: controller,
                               maxLines: 14,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontFamily: 'monospace', fontSize: 12),
                               decoration: const InputDecoration(
                                   border: OutlineInputBorder())),
                           if (localError != null)
                             Text(localError!,
-                                style: const TextStyle(color: coral))
+                                style: TextStyle(
+                                    color: context.palette.accentText))
                         ])),
                     actions: [
                       TextButton(
                           onPressed: () => Navigator.pop(context),
-                          child: const Text('Cancel')),
+                          child: Text('Cancel')),
                       FilledButton(
                           onPressed: () {
                             try {
@@ -1104,7 +1270,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                   localError = 'Enter a valid JSON object.');
                             }
                           },
-                          child: const Text('Apply'))
+                          child: Text('Apply'))
                     ])));
     disposeDialogController(controller);
     if (config != null) {
@@ -1187,18 +1353,19 @@ class _EditorScreenState extends State<EditorScreen> {
     final mapping = await showDialog<String>(
         context: context,
         builder: (context) => AlertDialog(
-                title: const Text('Insert a mapping'),
+                title: Text('Insert a mapping'),
                 content: SizedBox(
                     width: 510,
                     child: ListView(shrinkWrap: true, children: [
-                      const Text(
+                      Text(
                           'Fields come from upstream nodes and the latest successful run. Run the workflow to discover additional fields.',
-                          style: TextStyle(fontSize: 12, color: muted)),
+                          style: TextStyle(
+                              fontSize: 12, color: context.palette.muted)),
                       const SizedBox(height: 10),
                       ...values.map((value) => ListTile(
                           dense: true,
                           title: Text(value,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontFamily: 'monospace', fontSize: 12)),
                           onTap: () => Navigator.pop(context, value))),
                       const Divider(),
@@ -1211,7 +1378,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel')),
+                      child: Text('Cancel')),
                   FilledButton(
                       onPressed: () {
                         if (custom.text.trim().isNotEmpty) {
@@ -1219,7 +1386,7 @@ class _EditorScreenState extends State<EditorScreen> {
                               context, '{{input.${custom.text.trim()}}}');
                         }
                       },
-                      child: const Text('Use input field'))
+                      child: Text('Use input field'))
                 ]));
     disposeDialogController(custom);
     if (mapping == null || !mounted) return;
@@ -1245,7 +1412,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final target = await showDialog<String>(
         context: context,
         builder: (context) => SimpleDialog(
-            title: const Text('Use mapping for which setting?'),
+            title: Text('Use mapping for which setting?'),
             children: targets
                 .map((field) => SimpleDialogOption(
                     onPressed: () => Navigator.pop(context, field),
@@ -1289,12 +1456,13 @@ Offset _bezier(Offset a, Offset b, double t) {
 }
 
 class _GraphPainter extends CustomPainter {
-  _GraphPainter(this.draft);
+  _GraphPainter(this.draft, this.palette);
+  final AppPalette palette;
   final WorkflowDraft draft;
   @override
   void paint(Canvas canvas, Size size) {
     final grid = Paint()
-      ..color = line
+      ..color = palette.line
       ..strokeWidth = 1;
     for (double x = 0; x < size.width; x += 24) {
       for (double y = 0; y < size.height; y += 24) {
@@ -1331,4 +1499,52 @@ class _GraphPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _GraphPainter oldDelegate) => true;
+}
+
+class _ConnectionPreviewPainter extends CustomPainter {
+  _ConnectionPreviewPainter(
+      this.draft, this.sourceId, this.sourcePort, this.end, this.targetId);
+  final WorkflowDraft draft;
+  final String sourceId, sourcePort;
+  final Offset end;
+  final String? targetId;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final source = draft.nodes.where((n) => n.id == sourceId).firstOrNull;
+    if (source == null) return;
+    final start = Offset(
+        source.x + 216,
+        source.y +
+            (sourcePort == 'false'
+                ? 93
+                : sourcePort == 'true'
+                    ? 70
+                    : 57));
+    final finish = targetId == null
+        ? end
+        : Offset(draft.nodes.firstWhere((n) => n.id == targetId).x,
+            draft.nodes.firstWhere((n) => n.id == targetId).y + 57);
+    final curve = math.max(80.0, (finish.dx - start.dx).abs() * .5);
+    final path = Path()
+      ..moveTo(start.dx, start.dy)
+      ..cubicTo(start.dx + curve, start.dy, finish.dx - curve, finish.dy,
+          finish.dx, finish.dy);
+    canvas.drawPath(
+        path,
+        Paint()
+          ..color = coral
+          ..strokeWidth = 3
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round);
+    canvas.drawCircle(finish, targetId == null ? 6 : 11,
+        Paint()..color = coral.withValues(alpha: .35));
+  }
+
+  @override
+  bool shouldRepaint(covariant _ConnectionPreviewPainter oldDelegate) =>
+      end != oldDelegate.end ||
+      targetId != oldDelegate.targetId ||
+      sourceId != oldDelegate.sourceId ||
+      sourcePort != oldDelegate.sourcePort;
 }

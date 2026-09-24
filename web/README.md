@@ -2,7 +2,7 @@
 
 Flutter Web interface for the n9n API. It is served at `/`; nginx sends `/api/*` to the `backend` service and supports direct links to application routes.
 
-The interface uses a red and charcoal theme across authentication, workflows, credentials, runs, and the editor. The primary accent and connection ports are `#e5484d` (RGB 229, 72, 77); errors also carry an explicit “Error” label so the color alone does not convey their meaning.
+The interface defaults to a red and charcoal theme. Use the sun/moon button on the sign-in screen or navigation bar to switch between dark and light themes; the preference is saved in browser local storage as `n9n.theme`. The primary accent and connection ports are `#e5484d` (RGB 229, 72, 77) in both themes. Errors also carry an explicit “Error” label so color alone does not convey their meaning.
 
 ## Local development
 
@@ -17,4 +17,4 @@ For local API calls, serve the built application through the bundled nginx proxy
 
 ## Editor
 
-Drag nodes from the left palette onto the canvas. Click the circle on a node's right edge, then the circle on the next node's left edge to connect them. Condition nodes offer separate `true` and `false` circles. Click a connection to delete it. Select a node to edit its configuration, choose a credential, or open the raw JSON editor. Save stores a draft; Publish creates an executable version; Run now starts that published version. The Runs view shows each step's input, output, and errors. Browser paths are `/workflows`, `/workflows/:id`, `/credentials`, and `/runs/:id`.
+Drag nodes from the left palette onto the canvas. Drag the circle on a node's right edge onto the next node's left-edge circle to connect them; a preview follows the pointer. You can also click the output then the input, or select a source node and choose **Connect to node** in its settings panel. Condition nodes offer separate `true` and `false` circles. Click a connection to delete it. Select a node to edit its configuration, choose a credential, or open the raw JSON editor. Save stores a draft; Publish creates an executable version; Run now starts that published version. The Runs view shows each step's input, output, and errors. Browser paths are `/workflows`, `/workflows/:id`, `/credentials`, and `/runs/:id`.

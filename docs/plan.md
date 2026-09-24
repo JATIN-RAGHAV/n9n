@@ -12,7 +12,7 @@
 
 - Go API: all 15 PostgreSQL tests passed with `go test -race ./...`; `go vet ./...` passed after the final edits.
 - Rust worker: 13 tests, `cargo fmt --check`, and strict Clippy passed.
-- Flutter Web: six tests, `flutter analyze`, and `flutter build web --wasm --release` passed. A browser smoke covered registration, node creation/connection, publish, run, auto-refreshing inspection, mobile layout, and deep-link reload. `main.dart.wasm` loaded successfully in the tested browser.
+- Flutter Web: seven tests, `flutter analyze`, and `flutter build web --wasm --release` passed. A browser smoke covered registration, node creation/connection, publish, run, auto-refreshing inspection, mobile layout, and deep-link reload. `main.dart.wasm` loaded successfully in the tested browser.
 - The public API smoke exercised branching, mapping, immutable versions, webhook authentication and deduplication, schedule activation, private HTTP blocking, cross-user isolation, and cancellation.
 - The final OpenAPI document passed Redocly validation. It has 33 nonblocking warnings for unspecified license metadata and routes using a default error response instead of an explicit 4xx response.
 - All three application images built and their services became healthy. The final public API smoke passed.
@@ -27,7 +27,14 @@ Flutter's release build includes a JavaScript fallback on browsers without WasmG
 - Local PostgreSQL 16 container and production `DATABASE_URL` configuration; SQLite is no longer a runtime dependency.
 - Legacy data imported transactionally with matching table counts; an existing session remained valid.
 - Real PostgreSQL race tests cover concurrent API pools, publishing, claims, and webhook deduplication.
-- Both browser tests passed against PostgreSQL, including physical port clicks with accessibility semantics disabled.
+- All four browser tests passed against PostgreSQL, including physical port clicks and drags with accessibility semantics disabled, theme persistence, and an end-to-end workflow run.
+
+## Theme and connection controls
+
+- Sun/moon toggle on authentication and desktop/mobile navigation; defaults to dark and persists the selection in browser storage.
+- Light and dark palettes preserve unsaved editor state when switching.
+- Drag an output circle to an input with a live preview, click output then input, or use the selected node's **Connect to node** menu.
+- Pointer regression verifies drag creates a saved edge without moving nodes. Widget coverage verifies fast drag, fallback menu, and theme switching with unsaved edges.
 
 ## Deferred after first release
 
