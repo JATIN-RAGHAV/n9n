@@ -29,6 +29,12 @@ void main() {
           'config': {'fields': {}}
         },
         {
+          'id': 'branch',
+          'type': 'condition',
+          'position': {'x': 420, 'y': 300},
+          'config': {'left': 1, 'operator': 'equals', 'right': 1}
+        },
+        {
           'id': 'next',
           'type': 'set_fields',
           'position': {'x': 760, 'y': 300},
@@ -101,18 +107,34 @@ void main() {
         [
           {'x': 100, 'y': 100},
           {'x': 420, 'y': 100},
+          {'x': 420, 'y': 300},
           {'x': 760, 'y': 300}
         ]);
     await tester.tap(find.text('Connect to node'));
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('· next'));
+    await tester.tap(find.textContaining('· branch'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Save draft'));
     await tester.pumpAndSettle();
     expect((savedDraft!['edges'] as List), hasLength(2));
     expect(
         (savedDraft!['edges'] as List).last,
-        allOf(
-            containsPair('source', 'trigger'), containsPair('target', 'next')));
+        allOf(containsPair('source', 'trigger'),
+            containsPair('target', 'branch')));
+    final input = tester.getCenter(find.byKey(const ValueKey('port:next:in')));
+    final falseOutput =
+        tester.getCenter(find.byKey(const ValueKey('port:branch:false')));
+    final reverse = await tester.startGesture(input);
+    await reverse.moveTo(falseOutput);
+    await tester.pump();
+    await reverse.up();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save draft'));
+    await tester.pumpAndSettle();
+    expect((savedDraft!['edges'] as List), hasLength(3));
+    expect(
+        (savedDraft!['edges'] as List).last,
+        allOf(containsPair('source', 'branch'), containsPair('target', 'next'),
+            containsPair('source_port', 'false')));
   });
 }

@@ -21,7 +21,7 @@ class EditorScreen extends StatefulWidget {
 class _EditorScreenState extends State<EditorScreen> {
   Workflow? workflow;
   List<Json> catalog = [], credentials = [], runs = [];
-  String? error, selectedId, pendingSource, pendingPort;
+  String? error, selectedId, pendingSource, pendingPort, pendingTarget;
   bool busy = false, dirty = false;
   int configRevision = 0;
   String paletteSearch = '';
@@ -29,7 +29,8 @@ class _EditorScreenState extends State<EditorScreen> {
   final transform = TransformationController();
   final canvasKey = GlobalKey();
   Offset? dragPoint;
-  String? hoverTarget;
+  Offset? dragStart;
+  String? dragInputTarget, hoverTarget, hoverSource, hoverPort;
   int sequence = 0;
 
   @override
@@ -165,6 +166,7 @@ class _EditorScreenState extends State<EditorScreen> {
     setState(() {
       pendingSource = null;
       pendingPort = null;
+      pendingTarget = null;
     });
   }
 
@@ -183,13 +185,33 @@ class _EditorScreenState extends State<EditorScreen> {
     return null;
   }
 
+  (String, String)? _outputAt(Offset point) {
+    (String, String)? nearest;
+    var distance = 29.0;
+    for (final node in workflow!.draft.nodes.reversed) {
+      final ports = node.type == 'condition'
+          ? <(String, double)>[('true', 70), ('false', 93)]
+          : <(String, double)>[('out', 57)];
+      for (final (port, y) in ports) {
+        final candidateDistance =
+            (Offset(node.x + 216, node.y + y) - point).distance;
+        if (candidateDistance < distance) {
+          distance = candidateDistance;
+          nearest = (node.id, port);
+        }
+      }
+    }
+    return nearest;
+  }
+
   void _startConnectionDrag(String nodeId, String port) {
     final node = workflow!.draft.nodes.firstWhere((n) => n.id == nodeId);
     setState(() {
       pendingSource = nodeId;
       pendingPort = port;
+      pendingTarget = null;
       selectedId = nodeId;
-      dragPoint = Offset(
+      dragStart = Offset(
           node.x + 216,
           node.y +
               (port == 'false'
@@ -197,34 +219,81 @@ class _EditorScreenState extends State<EditorScreen> {
                   : port == 'true'
                       ? 70
                       : 57));
+      dragPoint = dragStart;
+      dragInputTarget = null;
       hoverTarget = null;
+      hoverSource = null;
+      hoverPort = null;
+    });
+  }
+
+  void _startReverseDrag(String nodeId) {
+    final node = workflow!.draft.nodes.firstWhere((n) => n.id == nodeId);
+    setState(() {
+      selectedId = nodeId;
+      pendingSource = null;
+      pendingPort = null;
+      pendingTarget = nodeId;
+      dragInputTarget = nodeId;
+      dragStart = Offset(node.x, node.y + 57);
+      dragPoint = dragStart;
+      hoverTarget = null;
+      hoverSource = null;
+      hoverPort = null;
     });
   }
 
   void _updateConnectionDrag(Offset global) {
     final point = _sceneFromGlobal(global);
+    final output = dragInputTarget == null ? null : _outputAt(point);
     setState(() {
       dragPoint = point;
-      hoverTarget = _inputAt(point);
+      if (dragInputTarget == null) {
+        hoverTarget = _inputAt(point);
+      } else {
+        hoverSource = output?.$1;
+        hoverPort = output?.$2;
+      }
     });
   }
 
   void _finishConnectionDrag() {
     if (dragPoint == null) return;
-    final target = hoverTarget;
+    final target = dragInputTarget ?? hoverTarget;
+    final source = hoverSource;
+    final port = hoverPort;
+    final reverse = dragInputTarget != null;
     setState(() {
       dragPoint = null;
+      dragStart = null;
+      dragInputTarget = null;
       hoverTarget = null;
+      hoverSource = null;
+      hoverPort = null;
     });
-    if (target != null) connect(target);
+    if (reverse && source != null && port != null) {
+      setState(() {
+        pendingSource = source;
+        pendingPort = port;
+      });
+      connect(target!);
+    } else if (!reverse && target != null) {
+      connect(target);
+    }
   }
 
   void _cancelConnectionDrag() {
+    if (dragPoint == null) return;
     setState(() {
       dragPoint = null;
+      dragStart = null;
+      dragInputTarget = null;
       hoverTarget = null;
+      hoverSource = null;
+      hoverPort = null;
       pendingSource = null;
       pendingPort = null;
+      pendingTarget = null;
     });
   }
 
@@ -620,16 +689,15 @@ class _EditorScreenState extends State<EditorScreen> {
                                   child: CustomPaint(
                                       painter: _GraphPainter(
                                           workflow!.draft, context.palette)))),
-                          if (dragPoint != null && pendingSource != null)
+                          if (dragPoint != null && dragStart != null)
                             Positioned.fill(
                                 child: IgnorePointer(
                                     child: CustomPaint(
                                         painter: _ConnectionPreviewPainter(
-                                            workflow!.draft,
-                                            pendingSource!,
-                                            pendingPort!,
+                                            dragStart!,
                                             dragPoint!,
-                                            hoverTarget)))),
+                                            hoverTarget != null ||
+                                                hoverSource != null)))),
                           for (final node in workflow!.draft.nodes)
                             Positioned(
                                 left: node.x - 14,
@@ -648,10 +716,14 @@ class _EditorScreenState extends State<EditorScreen> {
                             border: Border.all(color: context.palette.line)),
                         child: Text(
                             dragPoint != null
-                                ? 'Release on input'
-                                : pendingSource == null
-                                    ? 'Drag output → input'
-                                    : 'Now choose an input port',
+                                ? dragInputTarget == null
+                                    ? 'Release on input'
+                                    : 'Release on output'
+                                : pendingSource != null
+                                    ? 'Now choose an input port'
+                                    : pendingTarget != null
+                                        ? 'Now choose an output port'
+                                        : 'Drag between ports',
                             style: TextStyle(
                                 fontSize: 12,
                                 color: pine,
@@ -727,6 +799,7 @@ class _EditorScreenState extends State<EditorScreen> {
       selectedId = null;
       pendingSource = null;
       pendingPort = null;
+      pendingTarget = null;
     });
   }
 
@@ -735,26 +808,25 @@ class _EditorScreenState extends State<EditorScreen> {
     final condition = node.type == 'condition';
     // Stack only hit-tests within its own bounds. Keep the entire port target
     // inside this larger wrapper while the visible card stays at node.x/y.
-    return GestureDetector(
-        onPanStart: (_) {
-          if (dragPoint == null) snapshot();
-        },
-        onPanUpdate: (details) {
-          if (dragPoint != null) return;
-          final scale = transform.value.getMaxScaleOnAxis();
-          setState(() {
-            node.x = (node.x + details.delta.dx / scale).clamp(0, 2180);
-            node.y = (node.y + details.delta.dy / scale).clamp(0, 1450);
-            dirty = true;
-          });
-        },
-        child: SizedBox(
-            width: 244,
-            height: condition ? 150 : 130,
-            child: Stack(children: [
-              Positioned(
-                  left: 14,
-                  top: 14,
+    return SizedBox(
+        width: 244,
+        height: condition ? 150 : 130,
+        child: Stack(children: [
+          Positioned(
+              left: 14,
+              top: 14,
+              child: GestureDetector(
+                  onPanStart: (_) => snapshot(),
+                  onPanUpdate: (details) {
+                    final scale = transform.value.getMaxScaleOnAxis();
+                    setState(() {
+                      node.x =
+                          (node.x + details.delta.dx / scale).clamp(0, 2180);
+                      node.y =
+                          (node.y + details.delta.dy / scale).clamp(0, 1450);
+                      dirty = true;
+                    });
+                  },
                   child: Container(
                       width: 216,
                       height: condition ? 122 : 102,
@@ -817,71 +889,71 @@ class _EditorScreenState extends State<EditorScreen> {
                                         style: TextStyle(
                                             color: context.palette.muted,
                                             fontSize: 10))
-                                  ]))))),
-              if (!triggerTypes.contains(node.type))
-                Positioned(
-                    left: 0, top: 57, child: _port(false, node.id, 'in')),
-              if (condition) ...[
-                Positioned(
-                    right: 0, top: 70, child: _port(true, node.id, 'true')),
-                Positioned(
-                    right: 0, top: 93, child: _port(true, node.id, 'false')),
-                const Positioned(
-                    right: 31,
-                    top: 80,
-                    child:
-                        Text('T', style: TextStyle(fontSize: 10, color: pine))),
-                const Positioned(
-                    right: 31,
-                    top: 103,
-                    child:
-                        Text('F', style: TextStyle(fontSize: 10, color: pine))),
-              ] else
-                Positioned(
-                    right: 0, top: 57, child: _port(true, node.id, 'out')),
-            ])));
+                                  ])))))),
+          if (!triggerTypes.contains(node.type))
+            Positioned(left: 0, top: 57, child: _port(false, node.id, 'in')),
+          if (condition) ...[
+            Positioned(right: 0, top: 70, child: _port(true, node.id, 'true')),
+            Positioned(right: 0, top: 93, child: _port(true, node.id, 'false')),
+            const Positioned(
+                right: 31,
+                top: 80,
+                child: Text('T', style: TextStyle(fontSize: 10, color: pine))),
+            const Positioned(
+                right: 31,
+                top: 103,
+                child: Text('F', style: TextStyle(fontSize: 10, color: pine))),
+          ] else
+            Positioned(right: 0, top: 57, child: _port(true, node.id, 'out')),
+        ]));
   }
 
   Widget _port(bool output, String nodeId, String port) => Tooltip(
       message: output ? 'Connect $port output' : 'Connect input',
       child: Listener(
-          onPointerMove: output
-              ? (event) {
-                  if (dragPoint != null) _updateConnectionDrag(event.position);
-                }
-              : null,
-          onPointerUp: output
-              ? (event) {
-                  if (dragPoint != null) {
-                    _updateConnectionDrag(event.position);
-                    _finishConnectionDrag();
-                  }
-                }
-              : null,
-          onPointerCancel: output ? (_) => _cancelConnectionDrag() : null,
+          onPointerMove: (event) {
+            if (dragPoint != null) _updateConnectionDrag(event.position);
+          },
+          onPointerUp: (event) {
+            if (dragPoint != null) {
+              _updateConnectionDrag(event.position);
+              _finishConnectionDrag();
+            }
+          },
+          onPointerCancel: (_) => _cancelConnectionDrag(),
           child: GestureDetector(
               key: ValueKey('port:$nodeId:$port'),
               behavior: HitTestBehavior.opaque,
-              onPanStart: output
-                  ? (details) {
-                      _startConnectionDrag(nodeId, port);
-                      _updateConnectionDrag(details.globalPosition);
-                    }
-                  : null,
-              onPanUpdate: output
-                  ? (details) => _updateConnectionDrag(details.globalPosition)
-                  : null,
-              onPanEnd: output ? (_) {} : null,
-              onPanCancel: output ? _cancelConnectionDrag : null,
+              onPanStart: (details) {
+                if (output) {
+                  _startConnectionDrag(nodeId, port);
+                } else {
+                  _startReverseDrag(nodeId);
+                }
+                _updateConnectionDrag(details.globalPosition);
+              },
+              onPanUpdate: (details) =>
+                  _updateConnectionDrag(details.globalPosition),
+              onPanEnd: (_) {},
+              onPanCancel: _cancelConnectionDrag,
               onTap: () {
                 if (output) {
+                  final target = pendingTarget;
                   setState(() {
                     pendingSource = nodeId;
                     pendingPort = port;
                     selectedId = nodeId;
                   });
+                  if (target != null) connect(target);
                 } else {
-                  connect(nodeId);
+                  if (pendingSource != null) {
+                    connect(nodeId);
+                  } else {
+                    setState(() {
+                      pendingTarget = nodeId;
+                      selectedId = nodeId;
+                    });
+                  }
                 }
               },
               child: SizedBox(
@@ -893,6 +965,9 @@ class _EditorScreenState extends State<EditorScreen> {
                           height: 18,
                           decoration: BoxDecoration(
                               color: hoverTarget == nodeId ||
+                                      (hoverSource == nodeId &&
+                                          hoverPort == port) ||
+                                      (!output && pendingTarget == nodeId) ||
                                       pendingSource == nodeId &&
                                           pendingPort == port
                                   ? coral
@@ -1502,34 +1577,18 @@ class _GraphPainter extends CustomPainter {
 }
 
 class _ConnectionPreviewPainter extends CustomPainter {
-  _ConnectionPreviewPainter(
-      this.draft, this.sourceId, this.sourcePort, this.end, this.targetId);
-  final WorkflowDraft draft;
-  final String sourceId, sourcePort;
+  _ConnectionPreviewPainter(this.start, this.end, this.snapped);
+  final Offset start;
   final Offset end;
-  final String? targetId;
+  final bool snapped;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final source = draft.nodes.where((n) => n.id == sourceId).firstOrNull;
-    if (source == null) return;
-    final start = Offset(
-        source.x + 216,
-        source.y +
-            (sourcePort == 'false'
-                ? 93
-                : sourcePort == 'true'
-                    ? 70
-                    : 57));
-    final finish = targetId == null
-        ? end
-        : Offset(draft.nodes.firstWhere((n) => n.id == targetId).x,
-            draft.nodes.firstWhere((n) => n.id == targetId).y + 57);
-    final curve = math.max(80.0, (finish.dx - start.dx).abs() * .5);
+    final curve = math.max(80.0, (end.dx - start.dx).abs() * .5);
     final path = Path()
       ..moveTo(start.dx, start.dy)
-      ..cubicTo(start.dx + curve, start.dy, finish.dx - curve, finish.dy,
-          finish.dx, finish.dy);
+      ..cubicTo(
+          start.dx + curve, start.dy, end.dx - curve, end.dy, end.dx, end.dy);
     canvas.drawPath(
         path,
         Paint()
@@ -1537,14 +1596,13 @@ class _ConnectionPreviewPainter extends CustomPainter {
           ..strokeWidth = 3
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round);
-    canvas.drawCircle(finish, targetId == null ? 6 : 11,
-        Paint()..color = coral.withValues(alpha: .35));
+    canvas.drawCircle(
+        end, snapped ? 11 : 6, Paint()..color = coral.withValues(alpha: .35));
   }
 
   @override
   bool shouldRepaint(covariant _ConnectionPreviewPainter oldDelegate) =>
+      start != oldDelegate.start ||
       end != oldDelegate.end ||
-      targetId != oldDelegate.targetId ||
-      sourceId != oldDelegate.sourceId ||
-      sourcePort != oldDelegate.sourcePort;
+      snapped != oldDelegate.snapped;
 }

@@ -142,3 +142,47 @@ test('dragging an output port onto an input creates a connection', async ({ page
     { x: actionX, y: nodeY },
   ]);
 });
+
+test('dragging an input port onto an output creates a connection without moving the node', async ({ page }, testInfo) => {
+  const email = `reverse-port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.test`;
+  const registration = await page.request.post('/api/auth/register', { data: { email, password: 'reverse-ports-password' } });
+  expect(registration.ok()).toBeTruthy();
+  const draft = {
+    nodes: [
+      { id: 'trigger', type: 'manual_trigger', position: { x: triggerX, y: nodeY }, config: {} },
+      { id: 'action', type: 'set_fields', position: { x: actionX, y: nodeY }, config: { fields: {} } },
+    ],
+    edges: [],
+  };
+  const created = await page.request.post('/api/workflows', { data: { name: 'Reverse port regression', draft } });
+  expect(created.ok()).toBeTruthy();
+  const workflowId = (await created.json()).workflow.id;
+  const loaded = page.waitForResponse((response) => response.url().endsWith(`/api/workflows/${workflowId}`) && response.ok());
+  await page.goto(`/workflows/${workflowId}`);
+  await loaded;
+  await page.waitForTimeout(1000);
+  const before = await page.screenshot();
+  const ports = findConnectedPorts(redPortCenters(before));
+  if (!ports) {
+    await testInfo.attach('before-reverse-port-drag', { body: before, contentType: 'image/png' });
+    throw new Error('Could not locate output/input port pair for reverse drag');
+  }
+  await page.mouse.move(ports.input.x, ports.input.y);
+  await page.mouse.down();
+  await page.mouse.move(ports.output.x, ports.output.y, { steps: 25 });
+  await page.mouse.up();
+  await testInfo.attach('after-reverse-port-drag', { body: await page.screenshot(), contentType: 'image/png' });
+  await page.locator('flt-semantics-placeholder').evaluate((element) => element.click());
+  await page.getByRole('button', { name: 'Save draft' }).click();
+  await expect(page.getByText('Draft saved').last()).toBeVisible();
+  const saved = await page.request.get(`/api/workflows/${workflowId}`);
+  expect(saved.ok()).toBeTruthy();
+  const savedDraft = (await saved.json()).workflow.draft;
+  expect(savedDraft.edges).toEqual([
+    expect.objectContaining({ source: 'trigger', target: 'action', source_port: 'out' }),
+  ]);
+  expect(savedDraft.nodes.map(({ position }) => position)).toEqual([
+    { x: triggerX, y: nodeY },
+    { x: actionX, y: nodeY },
+  ]);
+});

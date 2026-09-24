@@ -27,13 +27,13 @@ Flutter's release build includes a JavaScript fallback on browsers without WasmG
 - Local PostgreSQL 16 container and production `DATABASE_URL` configuration; SQLite is no longer a runtime dependency.
 - Legacy data imported transactionally with matching table counts; an existing session remained valid.
 - Real PostgreSQL race tests cover concurrent API pools, publishing, claims, and webhook deduplication.
-- All four browser tests passed against PostgreSQL, including physical port clicks and drags with accessibility semantics disabled, theme persistence, and an end-to-end workflow run.
+- All five browser tests passed against PostgreSQL, including physical port clicks and drags with accessibility semantics disabled, theme persistence, and an end-to-end workflow run.
 
 ## Theme and connection controls
 
 - Sun/moon toggle on authentication and desktop/mobile navigation; defaults to dark and persists the selection in browser storage.
 - Light and dark palettes preserve unsaved editor state when switching.
-- Drag an output circle to an input with a live preview, click output then input, or use the selected node's **Connect to node** menu.
+- Drag between an output and input in either direction with a live preview, click the ports in either order, or use the selected node's **Connect to node** menu.
 - Pointer regression verifies drag creates a saved edge without moving nodes. Widget coverage verifies fast drag, fallback menu, and theme switching with unsaved edges.
 
 ## Deferred after first release
@@ -43,3 +43,5 @@ Flutter's release build includes a JavaScript fallback on browsers without WasmG
 - Arbitrary loops and multi input joins; the current graph is a directed acyclic graph with one incoming edge per action.
 - Multi-replica deployment testing and operational tooling beyond the local Compose deployment.
 - Custom OAuth client setup through the UI. Operators configure the Google web client in `.env`.
+
+Connection regression: input-first dragging originally moved the node and created no edge in Chrome and Firefox. Node movement now belongs only to the card body. All three physical-port tests pass in both browsers; the workflow smoke also passed in an isolated rerun after a parallel-run reload timeout.
