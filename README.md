@@ -1,6 +1,6 @@
 # n9n
 
-n9n is a visual workflow automation workspace. A Flutter Web editor builds workflows, a Go API stores accounts, drafts, versions, credentials, and durable run records in SQLite, and a Rust worker executes published graphs. The three services run together with Docker Compose.
+n9n is a visual workflow automation workspace. A Flutter Web editor builds workflows, a Go API stores accounts, drafts, versions, credentials, and durable run records in PostgreSQL, and a Rust worker executes published graphs. The three application services and a local PostgreSQL instance run together with Docker Compose.
 
 ## Start
 
@@ -24,7 +24,21 @@ make logs
 make down
 ```
 
-`make down` keeps the SQLite volume. The web server exposes `/healthz`; the API exposes `/api/health`. The browser only reaches the Go API through the web server's `/api/` proxy. Internal runner endpoints are unavailable from that proxy. `RUN_RETENTION_DAYS` defaults to 30 for terminal runs and step data; the backend cleans them and expired sessions hourly. Webhook event IDs remain as deduplication tombstones after run cleanup. If you change `WEB_PORT`, set `ALLOWED_ORIGIN` and `GOOGLE_REDIRECT_URI` to the matching public origin.
+`make down` keeps the PostgreSQL volume. The web server exposes `/healthz`; the API exposes `/api/health`. The browser only reaches the Go API through the web server's `/api/` proxy. Internal runner endpoints are unavailable from that proxy. `RUN_RETENTION_DAYS` defaults to 30 for terminal runs and step data; the backend cleans them and expired sessions hourly. Webhook event IDs remain as deduplication tombstones after run cleanup. If you change `WEB_PORT`, set `ALLOWED_ORIGIN` and `GOOGLE_REDIRECT_URI` to the matching public origin.
+
+## PostgreSQL configuration
+
+Local `make up` starts PostgreSQL 16 with a persistent `postgres_data` volume. The backend reads `DATABASE_URL`; the default is `postgres://n9n:n9n_local_dev@postgres:5432/n9n?sslmode=disable`. Local database tools can connect on `127.0.0.1:55432` (override `POSTGRES_PORT`). These credentials are for local development. If you change the local password, update both `POSTGRES_PASSWORD` and `DATABASE_URL` before initializing the volume.
+
+For production, replace `DATABASE_URL` in `.env` with your provider's PostgreSQL URL, including its required TLS parameters (for example `sslmode=verify-full`). Then recreate the application services:
+
+```sh
+docker compose up --build -d --wait web backend runner
+```
+
+This command does not start the local database. If it was already running, `docker compose stop postgres` stops it without deleting its data. No application code or image configuration changes are needed to switch database hosts. Keep `ENCRYPTION_KEY` unchanged when moving existing credentials. Database migrations run automatically at backend startup. Back up production PostgreSQL with your provider's backup tools or `pg_dump`.
+
+See [database migration](docs/database.md) for moving legacy SQLite data and [tests](tests/README.md) for local verification.
 
 ## Development and architecture
 

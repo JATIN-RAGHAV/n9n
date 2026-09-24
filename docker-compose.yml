@@ -24,7 +24,7 @@ services:
       dockerfile: backend/Dockerfile
     environment:
       ADDR: :8080
-      DATABASE_PATH: /data/n9n.db
+      DATABASE_URL: ${DATABASE_URL:-postgres://n9n:n9n_local_dev@postgres:5432/n9n?sslmode=disable}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Run make setup first}
       RUNNER_TOKEN: ${RUNNER_TOKEN:?Run make setup first}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
@@ -33,8 +33,6 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8080/api/oauth/google/callback}
       RUN_RETENTION_DAYS: ${RUN_RETENTION_DAYS:-30}
-    volumes:
-      - n9n_data:/data
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/health"]
       interval: 10s
@@ -71,5 +69,23 @@ services:
     stop_grace_period: 60s
     restart: unless-stopped
 
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
+    environment:
+      POSTGRES_USER: n9n
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-n9n_local_dev}
+      POSTGRES_DB: n9n
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U n9n -d n9n"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    mem_limit: 512m
+    restart: unless-stopped
+
 volumes:
-  n9n_data:
+  postgres_data:

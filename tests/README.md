@@ -5,3 +5,5 @@ Run `make up`, then `python3 tests/e2e_smoke.py`. The script uses Python's stand
 Run `python3 tests/restart_smoke.py` to verify a queued run survives a backend restart and executes its original published graph version after the runner returns. This test temporarily stops the runner and restores it in a `finally` block. It creates a unique test account and workflow.
 
 The browser smoke in `tests/browser` exercises the Flutter Wasm UI; see its README for setup.
+
+Backend integration tests use real PostgreSQL and isolated schemas. Run `make test-backend` for the local Compose database, or set `TEST_DATABASE_URL` explicitly; CI provisions its own PostgreSQL service.
