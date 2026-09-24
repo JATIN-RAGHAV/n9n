@@ -246,7 +246,7 @@ class _EditorScreenState extends State<EditorScreen> {
                             children: [
                               const Text(
                                   'Input JSON available to nodes as {{input.FIELD}}.',
-                                  style: TextStyle(color: Color(0xff66716b))),
+                                  style: TextStyle(color: muted)),
                               const SizedBox(height: 16),
                               TextField(
                                   controller: input,
@@ -257,7 +257,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                       labelText: 'Input JSON')),
                               if (localError != null)
                                 Text(localError!,
-                                    style: const TextStyle(color: Colors.red))
+                                    style: const TextStyle(color: coral))
                             ])),
                     actions: [
                       TextButton(
@@ -332,7 +332,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final width = MediaQuery.sizeOf(context).width;
     return Column(children: [
       Container(
-          color: Colors.white,
+          color: panel,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
           child: Wrap(
               spacing: 10,
@@ -354,7 +354,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     ])),
                 if (dirty)
                   const Text('Unsaved changes',
-                      style: TextStyle(color: Color(0xff9a6140), fontSize: 12)),
+                      style: TextStyle(color: coral, fontSize: 12)),
                 StatusPill(
                     workflow!.active
                         ? 'Active'
@@ -424,12 +424,12 @@ class _EditorScreenState extends State<EditorScreen> {
           ]
         : catalog;
     return Container(
-        color: Colors.white,
+        color: panel,
         child: ListView(padding: const EdgeInsets.all(16), children: [
           const Text('NODE LIBRARY', style: fieldLabel),
           const SizedBox(height: 8),
           const Text('Drag onto canvas',
-              style: TextStyle(fontSize: 12, color: Color(0xff718078))),
+              style: TextStyle(fontSize: 12, color: muted)),
           const SizedBox(height: 12),
           TextField(
               onChanged: (value) =>
@@ -472,7 +472,7 @@ class _EditorScreenState extends State<EditorScreen> {
           const SizedBox(height: 7),
           const Text(
               'Click an output, then an input to connect nodes. Click an edge to remove it.',
-              style: TextStyle(fontSize: 12, color: Color(0xff66716b))),
+              style: TextStyle(fontSize: 12, color: muted)),
         ]));
   }
 
@@ -480,7 +480,7 @@ class _EditorScreenState extends State<EditorScreen> {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(11),
       decoration: BoxDecoration(
-          color: dragging ? const Color(0xffe2eee7) : canvas,
+          color: dragging ? panelRaised : canvas,
           border: Border.all(color: line),
           borderRadius: BorderRadius.circular(10)),
       child: Row(children: [
@@ -492,7 +492,7 @@ class _EditorScreenState extends State<EditorScreen> {
             child: Text('${entry['name'] ?? nodeLabel('${entry['type']}')}',
                 style: const TextStyle(
                     fontSize: 12, fontWeight: FontWeight.w700))),
-        const Icon(Icons.drag_indicator, size: 15, color: Color(0xff9aa59d))
+        const Icon(Icons.drag_indicator, size: 15, color: muted)
       ]));
   Future<void> _mobileAddNode() async {
     final entries = catalog.isEmpty
@@ -535,7 +535,7 @@ class _EditorScreenState extends State<EditorScreen> {
             addNode(details.data, transform.toScene(local));
           },
           builder: (context, candidates, _) => Container(
-              color: const Color(0xfff0f0e9),
+              color: canvas,
               child: Stack(children: [
                 InteractiveViewer(
                     transformationController: transform,
@@ -568,7 +568,7 @@ class _EditorScreenState extends State<EditorScreen> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 11, vertical: 7),
                         decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: panel,
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(color: line)),
                         child: Text(
@@ -593,7 +593,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     right: 14,
                     child: Container(
                         decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: panel,
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(color: line)),
                         child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -679,14 +679,14 @@ class _EditorScreenState extends State<EditorScreen> {
                       width: 216,
                       height: condition ? 122 : 102,
                       decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: panel,
                           borderRadius: BorderRadius.circular(13),
                           border: Border.all(
                               color: chosen ? pine : line,
                               width: chosen ? 2 : 1),
                           boxShadow: const [
                             BoxShadow(
-                                color: Color(0x15000000),
+                                color: Color(0x66000000),
                                 blurRadius: 14,
                                 offset: Offset(0, 5))
                           ]),
@@ -705,15 +705,15 @@ class _EditorScreenState extends State<EditorScreen> {
                                           decoration: BoxDecoration(
                                               color: triggerTypes
                                                       .contains(node.type)
-                                                  ? const Color(0xffffe9dc)
-                                                  : const Color(0xffe3ede8),
+                                                  ? errorBg
+                                                  : panelRaised,
                                               borderRadius:
                                                   BorderRadius.circular(8)),
                                           child: Icon(iconFor(node.type),
                                               size: 18,
                                               color: triggerTypes
                                                       .contains(node.type)
-                                                  ? const Color(0xffbd5b3e)
+                                                  ? coral
                                                   : pine)),
                                       const SizedBox(width: 9),
                                       Expanded(
@@ -724,7 +724,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                                   fontWeight:
                                                       FontWeight.w800))),
                                       const Icon(Icons.drag_indicator,
-                                          color: Color(0xffacb4ad), size: 16)
+                                          color: muted, size: 16)
                                     ]),
                                     const SizedBox(height: 10),
                                     Text(
@@ -734,8 +734,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                                 ? 'Starts your workflow'
                                                 : 'Configure in the right panel',
                                         style: const TextStyle(
-                                            color: Color(0xff77847c),
-                                            fontSize: 10))
+                                            color: muted, fontSize: 10))
                                   ]))))),
               if (!triggerTypes.contains(node.type))
                 Positioned(
@@ -789,11 +788,10 @@ class _EditorScreenState extends State<EditorScreen> {
                               ? coral
                               : pine,
                           shape: BoxShape.circle,
-                          border:
-                              Border.all(color: Colors.white, width: 3)))))));
+                          border: Border.all(color: panel, width: 3)))))));
   Widget _runsStrip() => Container(
         height: 64,
-        color: Colors.white,
+        color: panel,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Row(children: [
           const Icon(Icons.history, size: 19, color: pine),
@@ -803,7 +801,7 @@ class _EditorScreenState extends State<EditorScreen> {
           Expanded(
               child: runs.isEmpty
                   ? const Text('No runs yet',
-                      style: TextStyle(color: Color(0xff7a857e), fontSize: 12))
+                      style: TextStyle(color: muted, fontSize: 12))
                   : ListView(
                       scrollDirection: Axis.horizontal,
                       children: runs
@@ -831,7 +829,7 @@ class _EditorScreenState extends State<EditorScreen> {
   Widget _inspector() {
     final node = selected;
     return Container(
-        color: Colors.white,
+        color: panel,
         child: node == null
             ? const Center(
                 child: Padding(
@@ -843,7 +841,7 @@ class _EditorScreenState extends State<EditorScreen> {
                           style: TextStyle(fontWeight: FontWeight.w800)),
                       SizedBox(height: 5),
                       Text('Edit its settings here.',
-                          style: TextStyle(color: Color(0xff748078)))
+                          style: TextStyle(color: muted))
                     ])))
             : ListView(
                 key: ValueKey('${node.id}-$configRevision'),
@@ -859,12 +857,10 @@ class _EditorScreenState extends State<EditorScreen> {
                       IconButton(
                           tooltip: 'Delete node',
                           onPressed: () => removeNode(node),
-                          icon: const Icon(Icons.delete_outline,
-                              color: Color(0xffa65045)))
+                          icon: const Icon(Icons.delete_outline, color: coral))
                     ]),
                     Text('ID: ${node.id}',
-                        style: const TextStyle(
-                            fontSize: 10, color: Color(0xff77847c))),
+                        style: const TextStyle(fontSize: 10, color: muted)),
                     const SizedBox(height: 18),
                     if (credentialTypes.contains(node.type)) ...[
                       const Text('GMAIL CREDENTIAL', style: fieldLabel),
@@ -902,8 +898,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     const SizedBox(height: 8),
                     const Text(
                         'Mappings: {{input.field}} uses this node’s incoming data; {{nodes.NODE_ID.field}} reads an upstream result.',
-                        style:
-                            TextStyle(color: Color(0xff7c867f), fontSize: 11)),
+                        style: TextStyle(color: muted, fontSize: 11)),
                     TextButton.icon(
                         onPressed: () => _insertMapping(node),
                         icon: const Icon(Icons.auto_fix_high, size: 17),
@@ -989,14 +984,14 @@ class _EditorScreenState extends State<EditorScreen> {
             padding: EdgeInsets.only(bottom: 12),
             child: Text(
                 'Numbers, true/false, and JSON values keep their types. Other text remains a string.',
-                style: TextStyle(fontSize: 11, color: Color(0xff7c867f)))));
+                style: TextStyle(fontSize: 11, color: muted))));
       case 'send_email':
         field('to', 'To', hint: 'person@example.com');
         field('subject', 'Subject');
         field('body', 'Body', maxLines: 6);
       default:
         result.add(const Text('This trigger needs no configuration.',
-            style: TextStyle(color: Color(0xff76817b))));
+            style: TextStyle(color: muted)));
     }
     return result;
   }
@@ -1091,7 +1086,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                   border: OutlineInputBorder())),
                           if (localError != null)
                             Text(localError!,
-                                style: const TextStyle(color: Colors.red))
+                                style: const TextStyle(color: coral))
                         ])),
                     actions: [
                       TextButton(
@@ -1198,8 +1193,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     child: ListView(shrinkWrap: true, children: [
                       const Text(
                           'Fields come from upstream nodes and the latest successful run. Run the workflow to discover additional fields.',
-                          style: TextStyle(
-                              fontSize: 12, color: Color(0xff66716b))),
+                          style: TextStyle(fontSize: 12, color: muted)),
                       const SizedBox(height: 10),
                       ...values.map((value) => ListTile(
                           dense: true,
@@ -1300,7 +1294,7 @@ class _GraphPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final grid = Paint()
-      ..color = const Color(0xffd5dbd2)
+      ..color = line
       ..strokeWidth = 1;
     for (double x = 0; x < size.width; x += 24) {
       for (double y = 0; y < size.height; y += 24) {

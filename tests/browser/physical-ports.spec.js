@@ -6,19 +6,19 @@ const actionX = 650;
 const nodeY = 130;
 const betweenPorts = actionX - (triggerX + 216);
 
-function greenPortCenters(buffer) {
+function redPortCenters(buffer) {
   const image = PNG.sync.read(buffer);
   const { width, height, data } = image;
   const marked = new Uint8Array(width * height);
-  const green = (x, y) => {
+  const red = (x, y) => {
     const i = (y * width + x) * 4;
-    return Math.abs(data[i] - 37) <= 6 && Math.abs(data[i + 1] - 92) <= 6 && Math.abs(data[i + 2] - 81) <= 6 && data[i + 3] > 240;
+    return Math.abs(data[i] - 229) <= 6 && Math.abs(data[i + 1] - 72) <= 6 && Math.abs(data[i + 2] - 77) <= 6 && data[i + 3] > 240;
   };
   const circles = [];
   for (let y = 200; y < Math.min(height - 80, 800); y++) {
     for (let x = 250; x < Math.min(width - 300, 1120); x++) {
       const start = y * width + x;
-      if (marked[start] || !green(x, y)) continue;
+      if (marked[start] || !red(x, y)) continue;
       const queue = [[x, y]];
       marked[start] = 1;
       let left = x, right = x, top = y, bottom = y;
@@ -29,7 +29,7 @@ function greenPortCenters(buffer) {
         for (const [nx, ny] of [[px - 1, py], [px + 1, py], [px, py - 1], [px, py + 1]]) {
           if (nx < 250 || nx >= width - 300 || ny < 200 || ny >= height - 80) continue;
           const next = ny * width + nx;
-          if (!marked[next] && green(nx, ny)) { marked[next] = 1; queue.push([nx, ny]); }
+          if (!marked[next] && red(nx, ny)) { marked[next] = 1; queue.push([nx, ny]); }
         }
       }
       const diameterX = right - left + 1;
@@ -53,7 +53,7 @@ function findConnectedPorts(circles) {
   return null;
 }
 
-test('outer halves of green ports connect with accessibility semantics disabled', async ({ page }, testInfo) => {
+test('outer halves of red ports connect with accessibility semantics disabled', async ({ page }, testInfo) => {
   const email = `physical-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.test`;
   const registration = await page.request.post('/api/auth/register', { data: { email, password: 'physical-ports-password' } });
   expect(registration.ok()).toBeTruthy();
@@ -74,10 +74,10 @@ test('outer halves of green ports connect with accessibility semantics disabled'
   expect(await page.locator('flt-semantics-placeholder').count(), 'semantics must remain disabled during pointer clicks').toBeGreaterThan(0);
 
   const before = await page.screenshot();
-  const ports = findConnectedPorts(greenPortCenters(before));
+  const ports = findConnectedPorts(redPortCenters(before));
   if (!ports) {
     await testInfo.attach('before-port-clicks', { body: before, contentType: 'image/png' });
-    throw new Error('Could not locate the green output/input port pair in the rendered Flutter canvas');
+    throw new Error('Could not locate the red output/input port pair in the rendered Flutter canvas');
   }
   await page.mouse.click(ports.output.x + 4, ports.output.y);
   await page.mouse.click(ports.input.x - 4, ports.input.y);

@@ -7,11 +7,18 @@ import 'models.dart';
 import 'editor.dart';
 import 'browser_navigation.dart';
 
-const ink = Color(0xff172322);
-const pine = Color(0xff255c51);
-const coral = Color(0xffe78566);
-const canvas = Color(0xfff5f2ea);
-const line = Color(0xffdeded4);
+// Shared red and charcoal palette for every app surface, including the editor.
+const shell = Color(0xff090a0d);
+const canvas = Color(0xff101217);
+const panel = Color(0xff1a1d24);
+const panelRaised = Color(0xff242832);
+const fieldSurface = Color(0xff14171d);
+const ink = Color(0xfff5f2ef);
+const muted = Color(0xffadb3bd);
+const pine = Color(0xffe5484d);
+const coral = Color(0xffff7378);
+const line = Color(0xff343943);
+const errorBg = Color(0xff3d1a20);
 
 void main() {
   final initialUri = Uri.base;
@@ -59,8 +66,25 @@ class _N9nAppState extends State<N9nApp> {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
+        brightness: Brightness.dark,
         scaffoldBackgroundColor: canvas,
-        colorScheme: ColorScheme.fromSeed(seedColor: pine, surface: canvas),
+        colorScheme: ColorScheme.fromSeed(
+                seedColor: pine, brightness: Brightness.dark, surface: panel)
+            .copyWith(
+                primary: pine,
+                onPrimary: shell,
+                secondary: coral,
+                onSecondary: shell,
+                onSurface: ink),
+        dialogTheme: const DialogThemeData(backgroundColor: panelRaised),
+        bottomSheetTheme:
+            const BottomSheetThemeData(backgroundColor: panelRaised),
+        cardTheme: const CardThemeData(color: panel),
+        popupMenuTheme: const PopupMenuThemeData(color: panelRaised),
+        dividerTheme: const DividerThemeData(color: line),
+        filledButtonTheme: FilledButtonThemeData(
+            style: FilledButton.styleFrom(
+                backgroundColor: pine, foregroundColor: shell)),
         fontFamily: 'Roboto',
         textTheme: const TextTheme(
             headlineLarge: TextStyle(
@@ -76,7 +100,14 @@ class _N9nAppState extends State<N9nApp> {
             titleLarge: TextStyle(fontWeight: FontWeight.w700, color: ink),
             bodyMedium: TextStyle(color: ink)),
         inputDecorationTheme: InputDecorationTheme(
+            filled: true,
+            fillColor: fieldSurface,
+            hintStyle: const TextStyle(color: muted),
+            labelStyle: const TextStyle(color: muted),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: line)),
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
             focusedBorder: OutlineInputBorder(
@@ -144,7 +175,7 @@ class _AuthScreenState extends State<AuthScreen> {
         if (MediaQuery.sizeOf(context).width > 850)
           Expanded(
               child: Container(
-                  color: ink,
+                  color: shell,
                   padding: const EdgeInsets.all(64),
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -200,8 +231,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                       register
                                           ? 'Start building useful workflows.'
                                           : 'Sign in to continue your work.',
-                                      style: const TextStyle(
-                                          color: Color(0xff66716b))),
+                                      style: const TextStyle(color: muted)),
                                   const SizedBox(height: 32),
                                   const Text('EMAIL', style: fieldLabel),
                                   const SizedBox(height: 8),
@@ -222,8 +252,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                   if (error != null) ...[
                                     const SizedBox(height: 16),
                                     Text(error!,
-                                        style:
-                                            const TextStyle(color: Colors.red))
+                                        style: const TextStyle(color: coral))
                                   ],
                                   const SizedBox(height: 24),
                                   SizedBox(
@@ -257,7 +286,7 @@ const fieldLabel = TextStyle(
     fontSize: 11,
     letterSpacing: 1.3,
     fontWeight: FontWeight.w800,
-    color: Color(0xff64716b));
+    color: muted);
 void disposeDialogController(TextEditingController controller) =>
     Future<void>.delayed(const Duration(milliseconds: 400), controller.dispose);
 
@@ -273,7 +302,7 @@ class Brand extends StatelessWidget {
             decoration: BoxDecoration(
                 color: coral, borderRadius: BorderRadius.circular(9)),
             child:
-                const Icon(Icons.account_tree_rounded, color: ink, size: 22)),
+                const Icon(Icons.account_tree_rounded, color: shell, size: 22)),
         const SizedBox(width: 10),
         Text('n9n',
             style: TextStyle(
@@ -387,7 +416,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         body: Column(children: [
       Container(
           height: 68,
-          color: ink,
+          color: shell,
           padding: EdgeInsets.symmetric(horizontal: width < 700 ? 16 : 32),
           child: Row(children: [
             const Brand(light: true),
@@ -544,7 +573,7 @@ class _WorkflowHomeState extends State<WorkflowHome> {
                             style: Theme.of(context).textTheme.headlineLarge),
                         const SizedBox(height: 5),
                         const Text('Build the flow. Know what happened.',
-                            style: TextStyle(color: Color(0xff66716b)))
+                            style: TextStyle(color: muted))
                       ]),
                   FilledButton.icon(
                       onPressed: creating ? null : create,
@@ -574,7 +603,7 @@ class _WorkflowHomeState extends State<WorkflowHome> {
               const Text('ALL WORKFLOWS', style: fieldLabel),
               const SizedBox(height: 12),
               ...workflows!.map((workflow) => Card(
-                  color: Colors.white,
+                  color: panel,
                   elevation: 0,
                   margin: const EdgeInsets.only(bottom: 12),
                   shape: RoundedRectangleBorder(
@@ -590,7 +619,7 @@ class _WorkflowHomeState extends State<WorkflowHome> {
                                 width: 46,
                                 height: 46,
                                 decoration: BoxDecoration(
-                                    color: const Color(0xffe5eee8),
+                                    color: panelRaised,
                                     borderRadius: BorderRadius.circular(12)),
                                 child: const Icon(Icons.account_tree_outlined,
                                     color: pine)),
@@ -608,8 +637,7 @@ class _WorkflowHomeState extends State<WorkflowHome> {
                                   Text(
                                       '${workflow.draft.nodes.length} nodes · ${workflow.draft.edges.length} connections',
                                       style: const TextStyle(
-                                          color: Color(0xff6e7872),
-                                          fontSize: 13))
+                                          color: muted, fontSize: 13))
                                 ])),
                             StatusPill(
                                 workflow.active
@@ -620,7 +648,7 @@ class _WorkflowHomeState extends State<WorkflowHome> {
                                 active: workflow.active),
                             const SizedBox(width: 14),
                             const Icon(Icons.arrow_forward_ios,
-                                size: 14, color: Color(0xff6e7872)),
+                                size: 14, color: muted),
                           ]))))),
             ],
             const SizedBox(height: 30),
@@ -629,7 +657,7 @@ class _WorkflowHomeState extends State<WorkflowHome> {
             if (runs?.isEmpty == true)
               const Text(
                   'No runs yet. Publish a workflow and run it from the editor.',
-                  style: TextStyle(color: Color(0xff66716b))),
+                  style: TextStyle(color: muted)),
             ...?runs?.take(6).map((run) => ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(
@@ -720,8 +748,7 @@ class _CredentialScreenState extends State<CredentialScreen> {
                                 children: [
                               const Text(
                                   'Use a Google OAuth client with Gmail access. Generate a refresh token for the mailbox, then save the three values below. Secrets are encrypted on the server.',
-                                  style: TextStyle(
-                                      fontSize: 13, color: Color(0xff66716b))),
+                                  style: TextStyle(fontSize: 13, color: muted)),
                               const SizedBox(height: 20),
                               TextField(
                                   controller: name,
@@ -748,7 +775,7 @@ class _CredentialScreenState extends State<CredentialScreen> {
                               if (localError != null) ...[
                                 const SizedBox(height: 10),
                                 Text(localError!,
-                                    style: const TextStyle(color: Colors.red))
+                                    style: const TextStyle(color: coral))
                               ],
                             ]))),
                     actions: [
@@ -858,7 +885,7 @@ class _CredentialScreenState extends State<CredentialScreen> {
               action: 'Connect Gmail',
               onAction: connect),
         ...?credentials?.map((item) => Card(
-            color: Colors.white,
+            color: panel,
             elevation: 0,
             child: ListTile(
                 contentPadding:
@@ -994,7 +1021,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
         const Center(child: CircularProgressIndicator()),
       if (detail != null) ...[
         Card(
-            color: Colors.white,
+            color: panel,
             elevation: 0,
             child: Padding(
                 padding: const EdgeInsets.all(22),
@@ -1007,7 +1034,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
           Padding(
               padding: const EdgeInsets.only(top: 12),
               child: SelectableText('Error: ${run['error']}',
-                  style: const TextStyle(color: Colors.red))),
+                  style: const TextStyle(color: coral))),
         const SizedBox(height: 22),
         const Text('STEP BY STEP', style: fieldLabel),
         const SizedBox(height: 12),
@@ -1018,15 +1045,14 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
         ...steps.asMap().entries.map((entry) {
           final step = entry.value;
           return Card(
-              color: Colors.white,
+              color: panel,
               elevation: 0,
               margin: const EdgeInsets.only(bottom: 12),
               child: ExpansionTile(
                   initiallyExpanded: step['error'] != null,
                   leading: CircleAvatar(
-                      backgroundColor: step['status'] == 'failed'
-                          ? const Color(0xfff9e1d7)
-                          : const Color(0xffe3ede8),
+                      backgroundColor:
+                          step['status'] == 'failed' ? errorBg : panelRaised,
                       child: Text('${entry.key + 1}',
                           style: const TextStyle(color: ink))),
                   title: Text(
@@ -1044,7 +1070,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                             children: [
                               if ('${step['error'] ?? ''}'.isNotEmpty)
                                 Text('${step['error']}',
-                                    style: const TextStyle(color: Colors.red)),
+                                    style: const TextStyle(color: coral)),
                               JsonBlock(
                                   'INPUT', step['input'] ?? step['input_json']),
                               JsonBlock('OUTPUT',
@@ -1090,8 +1116,7 @@ class JsonBlock extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                  color: const Color(0xfff2f4f0),
-                  borderRadius: BorderRadius.circular(9)),
+                  color: fieldSurface, borderRadius: BorderRadius.circular(9)),
               child: SelectableText(pretty,
                   style:
                       const TextStyle(fontFamily: 'monospace', fontSize: 12)))
@@ -1107,11 +1132,11 @@ class StatusPill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-          color: active ? const Color(0xffe0f0e8) : const Color(0xffeeeae0),
+          color: active ? errorBg : panelRaised,
           borderRadius: BorderRadius.circular(20)),
       child: Text(label.toUpperCase(),
           style: TextStyle(
-              color: active ? pine : const Color(0xff766f60),
+              color: active ? coral : muted,
               fontSize: 10,
               fontWeight: FontWeight.w800,
               letterSpacing: 1)));
@@ -1132,7 +1157,7 @@ class EmptyCard extends StatelessWidget {
   Widget build(BuildContext context) => Container(
       padding: const EdgeInsets.all(44),
       decoration: BoxDecoration(
-          color: Colors.white,
+          color: panel,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: line)),
       child: Column(children: [
@@ -1152,18 +1177,21 @@ class ErrorCard extends StatelessWidget {
   final VoidCallback retry;
   @override
   Widget build(BuildContext context) => Card(
-      color: const Color(0xffffede7),
+      color: errorBg,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: pine)),
       child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(children: [
-            Expanded(child: Text(message)),
+            Expanded(child: Text('Error: $message')),
             TextButton(onPressed: retry, child: const Text('Retry'))
           ])));
 }
 
 void showError(BuildContext context, String message) =>
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(message), backgroundColor: const Color(0xff9c3e32)));
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $message'), backgroundColor: errorBg));
 void showSuccess(BuildContext context, String message) =>
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message), backgroundColor: pine));
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: panelRaised));
