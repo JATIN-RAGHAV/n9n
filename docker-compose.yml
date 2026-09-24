@@ -6,7 +6,16 @@ services:
     ports:
       - "${WEB_PORT:-8080}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 4s
+      retries: 3
+    mem_limit: 128m
+    pids_limit: 100
+    stop_grace_period: 10s
     restart: unless-stopped
 
   backend:
@@ -20,8 +29,21 @@ services:
       RUNNER_TOKEN: ${RUNNER_TOKEN:?Run make setup first}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:8080}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8080/api/oauth/google/callback}
+      RUN_RETENTION_DAYS: ${RUN_RETENTION_DAYS:-30}
     volumes:
       - n9n_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 4s
+      retries: 6
+      start_period: 10s
+    mem_limit: 512m
+    pids_limit: 256
+    stop_grace_period: 30s
     restart: unless-stopped
 
   runner:
@@ -33,9 +55,20 @@ services:
       RUNNER_TOKEN: ${RUNNER_TOKEN:?Run make setup first}
       RUNNER_ID: ${RUNNER_ID:-runner-1}
       RUNNER_POLL_MS: ${RUNNER_POLL_MS:-1000}
+      RUNNER_CONCURRENCY: ${RUNNER_CONCURRENCY:-4}
       ALLOW_PRIVATE_HTTP: ${ALLOW_PRIVATE_HTTP:-false}
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "n9n-runner", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
+    mem_limit: 1g
+    pids_limit: 256
+    stop_grace_period: 60s
     restart: unless-stopped
 
 volumes:

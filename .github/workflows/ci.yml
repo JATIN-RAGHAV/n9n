@@ -1,0 +1,63 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - run: go test -race ./...
+        working-directory: backend
+      - run: go vet ./...
+        working-directory: backend
+
+  runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runner
+      - run: cargo fmt --check
+        working-directory: runner
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: runner
+      - run: cargo test
+        working-directory: runner
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.35.7
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: web
+      - run: flutter analyze
+        working-directory: web
+      - run: flutter test
+        working-directory: web
+      - run: flutter build web --wasm --release
+        working-directory: web
+
+  contract-and-compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npx --yes @redocly/cli@1.34.3 lint contracts/openapi.yaml
+      - run: docker compose --env-file .env.example config --quiet
