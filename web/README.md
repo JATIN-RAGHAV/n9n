@@ -1,6 +1,6 @@
 # n9n web
 
-Flutter Web interface for the n9n API. It is served at `/`; nginx sends `/api/*` to the `api` service and supports direct links to application routes.
+Flutter Web interface for the n9n API. It is served at `/`; nginx sends `/api/*` to the `backend` service and supports direct links to application routes.
 
 ## Local development
 
@@ -15,4 +15,4 @@ For local API calls, serve the built application through the bundled nginx proxy
 
 ## Editor
 
-Drag nodes from the left palette onto the canvas. Select an output port, then an input port to connect. Click a connection to delete it. Select a node to edit its configuration, choose a credential, or open the raw JSON editor. Save stores a draft; Publish creates an executable version; Run now starts that published version. The Runs view shows each step's input, output, and errors. Browser paths are `/workflows`, `/workflows/:id`, `/credentials`, and `/runs/:id`.
+Drag nodes from the left palette onto the canvas. Click the circle on a node's right edge, then the circle on the next node's left edge to connect them. Condition nodes offer separate `true` and `false` circles. Click a connection to delete it. Select a node to edit its configuration, choose a credential, or open the raw JSON editor. Save stores a draft; Publish creates an executable version; Run now starts that published version. The Runs view shows each step's input, output, and errors. Browser paths are `/workflows`, `/workflows/:id`, `/credentials`, and `/runs/:id`.

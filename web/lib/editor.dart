@@ -557,8 +557,8 @@ class _EditorScreenState extends State<EditorScreen> {
                                           _GraphPainter(workflow!.draft)))),
                           for (final node in workflow!.draft.nodes)
                             Positioned(
-                                left: node.x,
-                                top: node.y,
+                                left: node.x - 14,
+                                top: node.y - 14,
                                 child: _nodeCard(node)),
                         ]))),
                 Positioned(
@@ -656,6 +656,8 @@ class _EditorScreenState extends State<EditorScreen> {
   Widget _nodeCard(WorkflowNode node) {
     final chosen = selectedId == node.id;
     final condition = node.type == 'condition';
+    // Stack only hit-tests within its own bounds. Keep the entire port target
+    // inside this larger wrapper while the visible card stays at node.x/y.
     return GestureDetector(
         onPanStart: (_) => snapshot(),
         onPanUpdate: (details) {
@@ -666,89 +668,104 @@ class _EditorScreenState extends State<EditorScreen> {
             dirty = true;
           });
         },
-        child: Container(
-            width: 216,
-            height: condition ? 122 : 102,
-            decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(13),
-                border: Border.all(
-                    color: chosen ? pine : line, width: chosen ? 2 : 1),
-                boxShadow: const [
-                  BoxShadow(
-                      color: Color(0x15000000),
-                      blurRadius: 14,
-                      offset: Offset(0, 5))
-                ]),
-            child: Stack(clipBehavior: Clip.none, children: [
-              InkWell(
-                  onTap: () => setState(() => selectedId = node.id),
-                  child: Padding(
-                      padding: const EdgeInsets.fromLTRB(15, 15, 15, 10),
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(children: [
-                              Container(
-                                  width: 32,
-                                  height: 32,
-                                  decoration: BoxDecoration(
-                                      color: triggerTypes.contains(node.type)
-                                          ? const Color(0xffffe9dc)
-                                          : const Color(0xffe3ede8),
-                                      borderRadius: BorderRadius.circular(8)),
-                                  child: Icon(iconFor(node.type),
-                                      size: 18,
-                                      color: triggerTypes.contains(node.type)
-                                          ? const Color(0xffbd5b3e)
-                                          : pine)),
-                              const SizedBox(width: 9),
-                              Expanded(
-                                  child: Text(nodeLabel(node.type),
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w800))),
-                              const Icon(Icons.drag_indicator,
-                                  color: Color(0xffacb4ad), size: 16)
-                            ]),
-                            const SizedBox(height: 10),
-                            Text(
-                                node.type == 'condition'
-                                    ? 'Branch by condition'
-                                    : triggerTypes.contains(node.type)
-                                        ? 'Starts your workflow'
-                                        : 'Configure in the right panel',
-                                style: const TextStyle(
-                                    color: Color(0xff77847c), fontSize: 10))
-                          ]))),
+        child: SizedBox(
+            width: 244,
+            height: condition ? 150 : 130,
+            child: Stack(children: [
+              Positioned(
+                  left: 14,
+                  top: 14,
+                  child: Container(
+                      width: 216,
+                      height: condition ? 122 : 102,
+                      decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(13),
+                          border: Border.all(
+                              color: chosen ? pine : line,
+                              width: chosen ? 2 : 1),
+                          boxShadow: const [
+                            BoxShadow(
+                                color: Color(0x15000000),
+                                blurRadius: 14,
+                                offset: Offset(0, 5))
+                          ]),
+                      child: InkWell(
+                          onTap: () => setState(() => selectedId = node.id),
+                          child: Padding(
+                              padding:
+                                  const EdgeInsets.fromLTRB(15, 15, 15, 10),
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(children: [
+                                      Container(
+                                          width: 32,
+                                          height: 32,
+                                          decoration: BoxDecoration(
+                                              color: triggerTypes
+                                                      .contains(node.type)
+                                                  ? const Color(0xffffe9dc)
+                                                  : const Color(0xffe3ede8),
+                                              borderRadius:
+                                                  BorderRadius.circular(8)),
+                                          child: Icon(iconFor(node.type),
+                                              size: 18,
+                                              color: triggerTypes
+                                                      .contains(node.type)
+                                                  ? const Color(0xffbd5b3e)
+                                                  : pine)),
+                                      const SizedBox(width: 9),
+                                      Expanded(
+                                          child: Text(nodeLabel(node.type),
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight:
+                                                      FontWeight.w800))),
+                                      const Icon(Icons.drag_indicator,
+                                          color: Color(0xffacb4ad), size: 16)
+                                    ]),
+                                    const SizedBox(height: 10),
+                                    Text(
+                                        condition
+                                            ? 'Branch by condition'
+                                            : triggerTypes.contains(node.type)
+                                                ? 'Starts your workflow'
+                                                : 'Configure in the right panel',
+                                        style: const TextStyle(
+                                            color: Color(0xff77847c),
+                                            fontSize: 10))
+                                  ]))))),
               if (!triggerTypes.contains(node.type))
                 Positioned(
-                    left: -9, top: 48, child: _port(false, node.id, 'in')),
+                    left: 0, top: 57, child: _port(false, node.id, 'in')),
               if (condition) ...[
                 Positioned(
-                    right: -9, top: 61, child: _port(true, node.id, 'true')),
+                    right: 0, top: 70, child: _port(true, node.id, 'true')),
                 Positioned(
-                    right: -9, top: 84, child: _port(true, node.id, 'false')),
+                    right: 0, top: 93, child: _port(true, node.id, 'false')),
                 const Positioned(
-                    right: 17,
-                    top: 66,
+                    right: 31,
+                    top: 80,
                     child:
                         Text('T', style: TextStyle(fontSize: 10, color: pine))),
                 const Positioned(
-                    right: 17,
-                    top: 89,
+                    right: 31,
+                    top: 103,
                     child:
-                        Text('F', style: TextStyle(fontSize: 10, color: pine)))
+                        Text('F', style: TextStyle(fontSize: 10, color: pine))),
               ] else
                 Positioned(
-                    right: -9, top: 48, child: _port(true, node.id, 'out')),
+                    right: 0, top: 57, child: _port(true, node.id, 'out')),
             ])));
   }
 
   Widget _port(bool output, String nodeId, String port) => Tooltip(
       message: output ? 'Connect $port output' : 'Connect input',
       child: GestureDetector(
+          key: ValueKey('port:$nodeId:$port'),
+          behavior: HitTestBehavior.opaque,
           onTap: () {
             if (output) {
               setState(() {
@@ -760,16 +777,20 @@ class _EditorScreenState extends State<EditorScreen> {
               connect(nodeId);
             }
           },
-          child: Container(
-              width: 18,
-              height: 18,
-              decoration: BoxDecoration(
-                  color: pendingSource == nodeId && pendingPort == port
-                      ? coral
-                      : pine,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 3)),
-              child: const SizedBox.expand())));
+          child: SizedBox(
+              width: 28,
+              height: 28,
+              child: Center(
+                  child: Container(
+                      width: 18,
+                      height: 18,
+                      decoration: BoxDecoration(
+                          color: pendingSource == nodeId && pendingPort == port
+                              ? coral
+                              : pine,
+                          shape: BoxShape.circle,
+                          border:
+                              Border.all(color: Colors.white, width: 3)))))));
   Widget _runsStrip() => Container(
         height: 64,
         color: Colors.white,
@@ -1214,7 +1235,10 @@ class _EditorScreenState extends State<EditorScreen> {
       'send_email' => {'to', 'subject', 'body'},
       _ => <String>{},
     };
-    final targets = <String>[for (final key in allowed) if (node.config.containsKey(key)) key];
+    final targets = <String>[
+      for (final key in allowed)
+        if (node.config.containsKey(key)) key
+    ];
     for (final group in ['fields', 'headers']) {
       for (final key in asJson(node.config[group]).keys) {
         targets.add('$group.$key');
