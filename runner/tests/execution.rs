@@ -121,3 +121,68 @@ async fn resume_reuses_confirmed_outputs() {
         .collect();
     assert_eq!(steps, vec![("no".into(), "skipped".into())]);
 }
+
+async fn step_events(input: Value, graph: Value) -> (Vec<(String, String, String)>, Vec<Value>) {
+    let (api, seen) = mock_backend().await;
+    let job: Job = serde_json::from_value(json!({"id":"run1","lease_token":"lease1","workflow_id":"wf1","version":1,"input":input,"steps":[],"graph":graph})).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(5), execute(&api, job, false))
+        .await
+        .unwrap();
+    assert_eq!(result.unwrap_err(), "action output exceeded 256 KiB");
+    let events = seen.lock().unwrap();
+    let steps = events
+        .iter()
+        .filter(|(path, _)| path.ends_with("/steps"))
+        .map(|(_, body)| {
+            (
+                body["node_id"].as_str().unwrap().to_string(),
+                body["status"].as_str().unwrap().to_string(),
+                body["error"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let completes = events
+        .iter()
+        .filter(|(path, _)| path.ends_with("/complete"))
+        .map(|(_, body)| body.clone())
+        .collect();
+    (steps, completes)
+}
+
+#[tokio::test]
+async fn oversized_trigger_output_records_failed_step() {
+    let big = "x".repeat(300 * 1024);
+    let graph = json!({"nodes":[{"id":"start","type":"webhook_trigger","config":{"secret":"s"}}],"edges":[]});
+    let (steps, completes) = step_events(json!({"blob":big}), graph).await;
+    assert_eq!(
+        steps,
+        vec![
+            ("start".into(), "running".into(), "".into()),
+            (
+                "start".into(),
+                "failed".into(),
+                "action output exceeded 256 KiB".into()
+            ),
+        ]
+    );
+    assert_eq!(completes.len(), 1);
+    assert_eq!(completes[0]["status"], "failed");
+}
+
+#[tokio::test]
+async fn oversized_action_output_records_failed_step_and_stops() {
+    let half = "x".repeat(150 * 1024);
+    let graph = json!({"nodes":[{"id":"start","type":"manual_trigger","config":{}},{"id":"grow","type":"set_fields","config":{"fields":{"extra":half}}},{"id":"after","type":"set_fields","config":{"fields":{"done":true}}}],"edges":[{"id":"a","source":"start","target":"grow","source_port":"out"},{"id":"b","source":"grow","target":"after","source_port":"out"}]});
+    let (steps, completes) = step_events(json!({"blob":half}), graph).await;
+    let last = steps.last().unwrap();
+    assert_eq!(
+        last,
+        &(
+            "grow".into(),
+            "failed".into(),
+            "action output exceeded 256 KiB".into()
+        )
+    );
+    assert!(!steps.iter().any(|(node, _, _)| node == "after"));
+    assert_eq!(completes[0]["status"], "failed");
+}

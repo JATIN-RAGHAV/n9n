@@ -649,9 +649,9 @@ async fn execute_inner(
                 attempt,
             )
             .await?;
-            let action = run_node(api, job, node, &input, &outputs, allow_private).await;
-            match action {
-                Ok((o, b)) => {
+            let action = run_node(api, job, node, &input, &outputs, allow_private)
+                .await
+                .and_then(|(o, b)| {
                     let output_len = serde_json::to_vec(&o)
                         .map_err(|error| error.to_string())?
                         .len();
@@ -663,6 +663,10 @@ async fn execute_inner(
                         }
                         .into());
                     }
+                    Ok((o, b))
+                });
+            match action {
+                Ok((o, b)) => {
                     output = o;
                     branch = b;
                     outputs.insert(node_id.clone(), output.clone());
