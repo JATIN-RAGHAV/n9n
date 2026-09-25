@@ -240,10 +240,10 @@ func (s *Server) claim(runner string) (any, error) {
 			return nil, e
 		}
 	}
-	var rid, wid, graphStr, inputStr string
+	var rid, wid, graphStr, inputStr, kind string
 	var version int
 	var isTest bool
-	e = tx.QueryRow(`SELECT r.id,r.workflow_id,r.version,COALESCE(r.graph_snapshot,v.graph),r.input,r.is_test FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.status='queued' ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED`).Scan(&rid, &wid, &version, &graphStr, &inputStr, &isTest)
+	e = tx.QueryRow(`SELECT r.id,r.workflow_id,r.version,COALESCE(r.graph_snapshot,v.graph),r.input,r.is_test,r.kind FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.status='queued' ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED`).Scan(&rid, &wid, &version, &graphStr, &inputStr, &isTest, &kind)
 	if errors.Is(e, sql.ErrNoRows) {
 		return nil, tx.Commit()
 	}
@@ -278,7 +278,7 @@ func (s *Server) claim(runner string) (any, error) {
 	if e = tx.Commit(); e != nil {
 		return nil, e
 	}
-	return map[string]any{"id": rid, "lease_token": lease, "workflow_id": wid, "version": version, "test": isTest, "graph": graph, "input": input, "steps": steps}, nil
+	return map[string]any{"id": rid, "lease_token": lease, "workflow_id": wid, "version": version, "test": isTest, "kind": kind, "graph": graph, "input": input, "steps": steps}, nil
 }
 func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []string) {
 	if len(p) == 0 && r.Method == "GET" {
@@ -432,5 +432,5 @@ func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []st
 		fail(w, 500, "database error")
 		return
 	}
-	write(w, 200, map[string]any{"run": Run{ID: rid, WorkflowID: wid, Version: a.Version, Status: "queued", Input: a.Input, CreatedAt: t, UpdatedAt: t}, "duplicate": false})
+	write(w, 200, map[string]any{"run": Run{ID: rid, WorkflowID: wid, Version: a.Version, Kind: "normal", Status: "queued", Input: a.Input, CreatedAt: t, UpdatedAt: t}, "duplicate": false})
 }

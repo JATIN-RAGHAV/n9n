@@ -26,7 +26,7 @@ func TestSchemaMigrationAndRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 		var version int
-		if err := s.db.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
+		if err := s.db.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil || version != len(migrations) {
 			t.Fatalf("migration version=%d err=%v", version, err)
 		}
 		if i == 0 {

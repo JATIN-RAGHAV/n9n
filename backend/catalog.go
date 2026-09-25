@@ -114,5 +114,5 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request, wid string) {
 		fail(w, 500, "database error")
 		return
 	}
-	write(w, 200, map[string]any{"run": Run{ID: rid, WorkflowID: wid, Version: version, Status: "queued", Input: input, CreatedAt: t, UpdatedAt: t}, "duplicate": false})
+	write(w, 200, map[string]any{"run": Run{ID: rid, WorkflowID: wid, Version: version, Kind: "normal", Status: "queued", Input: input, CreatedAt: t, UpdatedAt: t}, "duplicate": false})
 }

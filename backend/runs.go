@@ -15,28 +15,32 @@ func queueRun(db *sql.DB, wid string, version int, input any) (Run, error) {
 	if e != nil {
 		return Run{}, e
 	}
-	return Run{ID: id, WorkflowID: wid, Version: version, Status: "queued", Input: input, CreatedAt: t, UpdatedAt: t}, nil
+	return Run{ID: id, WorkflowID: wid, Version: version, Kind: "normal", Status: "queued", Input: input, CreatedAt: t, UpdatedAt: t}, nil
 }
 func queueTestRun(tx *sql.Tx, wid string, version int, graph Graph, input any) (Run, error) {
 	id := id()
 	t := now()
-	_, err := tx.Exec(`INSERT INTO runs(id,workflow_id,version,status,input,graph_snapshot,is_test,created_at,updated_at) VALUES($1,$2,$3,'queued',$4,$5,TRUE,$6,$6)`, id, wid, version, jsonText(input), jsonText(graph), t)
+	_, err := tx.Exec(`INSERT INTO runs(id,workflow_id,version,status,input,graph_snapshot,is_test,kind,created_at,updated_at) VALUES($1,$2,$3,'queued',$4,$5,TRUE,'test',$6,$6)`, id, wid, version, jsonText(input), jsonText(graph), t)
 	if err != nil {
 		return Run{}, err
 	}
-	return Run{ID: id, WorkflowID: wid, Version: version, Test: true, Status: "queued", Input: input, CreatedAt: t, UpdatedAt: t}, nil
+	return Run{ID: id, WorkflowID: wid, Version: version, Kind: "test", Test: true, Status: "queued", Input: input, CreatedAt: t, UpdatedAt: t}, nil
 }
 func getRun(q querier, id string) (Run, error) {
 	var x Run
 	var input string
-	e := q.QueryRow(`SELECT id,workflow_id,version,is_test,status,input,error,created_at,updated_at FROM runs WHERE id=$1`, id).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Test, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
+	var resume sql.NullString
+	e := q.QueryRow(`SELECT id,workflow_id,version,kind,is_test,parent_run_id,resume_from_node,status,input,error,created_at,updated_at FROM runs WHERE id=$1`, id).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Kind, &x.Test, &x.ParentRunID, &resume, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
+	x.ResumeFromNode = resume.String
 	_ = json.Unmarshal([]byte(input), &x.Input)
 	return x, e
 }
 func (s *Server) ownedRun(id, uid string) (Run, error) {
 	var x Run
 	var input string
-	e := s.db.QueryRow(`SELECT r.id,r.workflow_id,r.version,r.is_test,r.status,r.input,r.error,r.created_at,r.updated_at FROM runs r JOIN workflows w ON w.id=r.workflow_id WHERE r.id=$1 AND w.user_id=$2`, id, uid).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Test, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
+	var resume sql.NullString
+	e := s.db.QueryRow(`SELECT r.id,r.workflow_id,r.version,r.kind,r.is_test,r.parent_run_id,r.resume_from_node,r.status,r.input,r.error,r.created_at,r.updated_at FROM runs r JOIN workflows w ON w.id=r.workflow_id WHERE r.id=$1 AND w.user_id=$2`, id, uid).Scan(&x.ID, &x.WorkflowID, &x.Version, &x.Kind, &x.Test, &x.ParentRunID, &resume, &x.Status, &input, &x.Error, &x.CreatedAt, &x.UpdatedAt)
+	x.ResumeFromNode = resume.String
 	_ = json.Unmarshal([]byte(input), &x.Input)
 	return x, e
 }
@@ -83,7 +87,7 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []st
 		return
 	}
 	if len(p) == 1 && r.Method == "GET" {
-		rows, e := s.db.Query(`SELECT node_id,status,input,output,error,branch,attempt,created_at FROM steps WHERE run_id=$1 ORDER BY id`, x.ID)
+		rows, e := s.db.Query(`SELECT node_id,status,input,output,error,branch,attempt,COALESCE(started_at,''),COALESCE(finished_at,''),duration_ms,created_at FROM steps WHERE run_id=$1 ORDER BY id`, x.ID)
 		if e != nil {
 			fail(w, 500, "database error")
 			return
@@ -93,7 +97,12 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []st
 		for rows.Next() {
 			var t Step
 			var in, out string
-			if rows.Scan(&t.NodeID, &t.Status, &in, &out, &t.Error, &t.Branch, &t.Attempt, &t.CreatedAt) == nil {
+			var duration sql.NullInt64
+			if rows.Scan(&t.NodeID, &t.Status, &in, &out, &t.Error, &t.Branch, &t.Attempt, &t.StartedAt, &t.FinishedAt, &duration, &t.CreatedAt) == nil {
+				if duration.Valid {
+					ms := int(duration.Int64)
+					t.DurationMs = &ms
+				}
 				_ = json.Unmarshal([]byte(in), &t.Input)
 				_ = json.Unmarshal([]byte(out), &t.Output)
 				steps = append(steps, t)
