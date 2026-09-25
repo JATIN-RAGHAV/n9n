@@ -44,6 +44,8 @@ See [database migration](docs/database.md) for moving legacy SQLite data and [te
 
 ## Development and architecture
 
+[![n9n architecture](docs/architecture.png)](docs/architecture.png)
+
 - [Flutter web app](web/README.md)
 - [Android and iOS app](mobile/README.md)
 - [HTTP API contract](contracts/README.md)
