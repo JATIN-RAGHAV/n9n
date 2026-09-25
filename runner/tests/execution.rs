@@ -186,3 +186,32 @@ async fn oversized_action_output_records_failed_step_and_stops() {
     assert!(!steps.iter().any(|(node, _, _)| node == "after"));
     assert_eq!(completes[0]["status"], "failed");
 }
+
+#[tokio::test]
+async fn steps_report_start_time_and_duration() {
+    let (api, seen) = mock_backend().await;
+    tokio::time::timeout(Duration::from_secs(5), execute(&api, job(json!([])), false))
+        .await
+        .unwrap()
+        .unwrap();
+    let events = seen.lock().unwrap();
+    let steps: Vec<&Value> = events
+        .iter()
+        .filter(|(path, _)| path.ends_with("/steps"))
+        .map(|(_, body)| body)
+        .collect();
+    for step in &steps {
+        match step["status"].as_str().unwrap() {
+            "running" => {
+                assert!(step["started_at"].as_str().unwrap().ends_with('Z'));
+                assert!(step.get("duration_ms").is_none());
+            }
+            "succeeded" => {
+                assert!(step["started_at"].is_string());
+                assert!(step["duration_ms"].is_u64());
+            }
+            "skipped" => assert!(step.get("started_at").is_none()),
+            other => panic!("unexpected status {other}"),
+        }
+    }
+}

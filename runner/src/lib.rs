@@ -22,6 +22,23 @@ use url::Host;
 
 pub type Result<T> = std::result::Result<T, String>;
 
+/// When a node started running, for step timing reports.
+pub struct StepTiming {
+    pub started_at: String,
+    started: std::time::Instant,
+}
+impl StepTiming {
+    pub fn start() -> Self {
+        Self {
+            started_at: Utc::now().format("%Y-%m-%dT%H:%M:%S%.9fZ").to_string(),
+            started: std::time::Instant::now(),
+        }
+    }
+    pub fn elapsed_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+}
+
 pub fn health_touch(kind: &str) {
     let dir = std::env::var("RUNNER_HEALTH_DIR").unwrap_or_else(|_| "/tmp/n9n-health".into());
     let _ = std::fs::create_dir_all(&dir);
@@ -120,7 +137,36 @@ impl Api {
         branch: &str,
         attempt: u32,
     ) -> Result<()> {
-        self.post(&format!("/internal/jobs/{}/steps",job.id),json!({"lease_token":job.lease_token,"node_id":node,"status":status,"input":input,"output":output,"error":error,"branch":branch,"attempt":attempt})).await.map(|_|())
+        self.step_timed(
+            job, node, status, input, output, error, branch, attempt, None,
+        )
+        .await
+    }
+    /// Posts a step record, including when the node started and, for a
+    /// finished node, how long it ran.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn step_timed(
+        &self,
+        job: &Job,
+        node: &str,
+        status: &str,
+        input: Value,
+        output: Value,
+        error: &str,
+        branch: &str,
+        attempt: u32,
+        timing: Option<&StepTiming>,
+    ) -> Result<()> {
+        let mut body = json!({"lease_token":job.lease_token,"node_id":node,"status":status,"input":input,"output":output,"error":error,"branch":branch,"attempt":attempt});
+        if let Some(timing) = timing {
+            body["started_at"] = json!(timing.started_at);
+            if status != "running" {
+                body["duration_ms"] = json!(timing.elapsed_ms());
+            }
+        }
+        self.post(&format!("/internal/jobs/{}/steps", job.id), body)
+            .await
+            .map(|_| ())
     }
     pub async fn complete(&self, job: &Job, status: &str, error: &str) -> Result<()> {
         self.post(
@@ -647,7 +693,8 @@ async fn execute_inner(
             {
                 return Err(format!("uncertain: interrupted action {}", node_id));
             };
-            api.step(
+            let timing = StepTiming::start();
+            api.step_timed(
                 job,
                 &node_id,
                 "running",
@@ -656,6 +703,7 @@ async fn execute_inner(
                 "",
                 "",
                 attempt,
+                Some(&timing),
             )
             .await?;
             let action = run_node(api, job, node, &input, &outputs, allow_private)
@@ -679,7 +727,7 @@ async fn execute_inner(
                     output = o;
                     branch = b;
                     outputs.insert(node_id.clone(), output.clone());
-                    api.step(
+                    api.step_timed(
                         job,
                         &node_id,
                         "succeeded",
@@ -688,13 +736,14 @@ async fn execute_inner(
                         "",
                         &branch,
                         attempt,
+                        Some(&timing),
                     )
                     .await
                     .map_err(|error| if is_unsafe(&node.kind, &node.config) { format!("uncertain: action succeeded but step could not be recorded: {error}") } else { error })?
                 }
                 Err(e) => {
                     let report = api
-                        .step(
+                        .step_timed(
                             job,
                             &node_id,
                             "failed",
@@ -703,6 +752,7 @@ async fn execute_inner(
                             &e,
                             "",
                             attempt,
+                            Some(&timing),
                         )
                         .await;
                     if let Err(report_error) = report {

@@ -103,3 +103,52 @@ func TestTestRunAndClaimedJobReportKind(t *testing.T) {
 		t.Fatalf("job kind: %#v", job)
 	}
 }
+
+func TestStepTimingIsStoredAndReported(t *testing.T) {
+	s := testServer(t)
+	cookie := registered(t, s, "timing-"+id()+"@example.com")
+	graph := map[string]any{"nodes": []any{map[string]any{"id": "start", "type": "manual_trigger", "position": map[string]any{"x": 0, "y": 0}, "config": map[string]any{}}}, "edges": []any{}}
+	status, value, _ := request(t, s, cookie, "POST", "/api/workflows", map[string]any{"name": "timing", "draft": graph}, false)
+	requireOK(t, status, value)
+	wid := value["workflow"].(map[string]any)["id"].(string)
+	status, value, _ = request(t, s, cookie, "POST", "/api/workflows/"+wid+"/test", map[string]any{"input": map[string]any{}}, false)
+	requireOK(t, status, value)
+	rid := value["run"].(map[string]any)["id"].(string)
+	claimed, err := s.claim("timing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := claimed.(map[string]any)["lease_token"].(string)
+	started := "2026-01-02T03:04:05.123456789Z"
+	for _, body := range []map[string]any{
+		{"lease_token": lease, "node_id": "start", "status": "running", "input": map[string]any{}, "output": nil, "attempt": 1, "started_at": started},
+		{"lease_token": lease, "node_id": "start", "status": "succeeded", "input": map[string]any{}, "output": map[string]any{}, "attempt": 1, "started_at": started, "duration_ms": 42},
+	} {
+		status, value, _ = request(t, s, nil, "POST", "/internal/jobs/"+rid+"/steps", body, true)
+		requireOK(t, status, value)
+	}
+	for _, bad := range []map[string]any{
+		{"lease_token": lease, "node_id": "start", "status": "succeeded", "input": map[string]any{}, "output": map[string]any{}, "attempt": 1, "started_at": "yesterday"},
+		{"lease_token": lease, "node_id": "start", "status": "succeeded", "input": map[string]any{}, "output": map[string]any{}, "attempt": 1, "duration_ms": -1},
+	} {
+		if status, _, _ = request(t, s, nil, "POST", "/internal/jobs/"+rid+"/steps", bad, true); status != 400 {
+			t.Fatalf("invalid timing accepted: %d %v", status, bad)
+		}
+	}
+	// A runner that does not send timing still works.
+	status, value, _ = request(t, s, nil, "POST", "/internal/jobs/"+rid+"/steps", map[string]any{"lease_token": lease, "node_id": "start", "status": "skipped", "input": map[string]any{}, "output": nil, "attempt": 1}, true)
+	requireOK(t, status, value)
+	status, value, _ = request(t, s, cookie, "GET", "/api/runs/"+rid, nil, false)
+	requireOK(t, status, value)
+	steps := value["steps"].([]any)
+	running, done, legacy := steps[0].(map[string]any), steps[1].(map[string]any), steps[2].(map[string]any)
+	if running["started_at"] != started || running["finished_at"] != nil || running["duration_ms"] != nil {
+		t.Fatalf("running step: %#v", running)
+	}
+	if done["started_at"] != started || done["finished_at"] == nil || done["duration_ms"] != float64(42) {
+		t.Fatalf("finished step: %#v", done)
+	}
+	if legacy["started_at"] != nil || legacy["duration_ms"] != nil || legacy["finished_at"] == nil {
+		t.Fatalf("legacy step: %#v", legacy)
+	}
+}

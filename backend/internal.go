@@ -91,6 +91,8 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 			Error      string `json:"error"`
 			Branch     string `json:"branch"`
 			Attempt    int    `json:"attempt"`
+			StartedAt  string `json:"started_at"`
+			DurationMs *int   `json:"duration_ms"`
 		}
 		if e := decodeLimit(r, &a, 4<<20); e != nil {
 			fail(w, 400, e.Error())
@@ -106,6 +108,21 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 		if a.Branch != "" && a.Branch != "true" && a.Branch != "false" {
 			fail(w, 400, "invalid branch")
 			return
+		}
+		var startedAt, finishedAt any
+		if a.StartedAt != "" {
+			if _, e := time.Parse(time.RFC3339Nano, a.StartedAt); e != nil {
+				fail(w, 400, "invalid started_at")
+				return
+			}
+			startedAt = a.StartedAt
+		}
+		if a.DurationMs != nil && (*a.DurationMs < 0 || *a.DurationMs > 7*24*3600*1000) {
+			fail(w, 400, "invalid duration_ms")
+			return
+		}
+		if a.Status != "running" {
+			finishedAt = now()
 		}
 		tx, e := s.db.Begin()
 		if e != nil {
@@ -132,7 +149,7 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 			fail(w, 400, "node not in workflow")
 			return
 		}
-		_, e = tx.Exec(`INSERT INTO steps(run_id,node_id,status,input,output,error,branch,attempt,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, runID, a.NodeID, a.Status, jsonText(a.Input), jsonText(a.Output), a.Error, a.Branch, a.Attempt, now())
+		_, e = tx.Exec(`INSERT INTO steps(run_id,node_id,status,input,output,error,branch,attempt,started_at,finished_at,duration_ms,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, runID, a.NodeID, a.Status, jsonText(a.Input), jsonText(a.Output), a.Error, a.Branch, a.Attempt, startedAt, finishedAt, a.DurationMs, now())
 		if e != nil {
 			fail(w, 500, "database error")
 			return
