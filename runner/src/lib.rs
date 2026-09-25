@@ -18,6 +18,7 @@ use tokio::{
     net::lookup_host,
     time::{sleep, timeout},
 };
+use url::Host;
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -380,25 +381,33 @@ pub async fn safe_http_client(url: &Url, allow_private: bool) -> Result<Client> 
     if !url.username().is_empty() || url.password().is_some() {
         return Err("URL credentials forbidden".into());
     };
-    let host = url.host_str().ok_or("URL host required")?;
     let port = url.port_or_known_default().ok_or("URL port required")?;
-    let addresses: Vec<SocketAddr> = lookup_host((host, port))
-        .await
-        .map_err(|e| format!("DNS: {e}"))?
-        .collect();
+    let (domain, addresses): (Option<&str>, Vec<SocketAddr>) =
+        match url.host().ok_or("URL host required")? {
+            Host::Ipv4(ip) => (None, vec![SocketAddr::new(IpAddr::V4(ip), port)]),
+            Host::Ipv6(ip) => (None, vec![SocketAddr::new(IpAddr::V6(ip), port)]),
+            Host::Domain(name) => (
+                Some(name),
+                lookup_host((name, port))
+                    .await
+                    .map_err(|e| format!("DNS: {e}"))?
+                    .collect(),
+            ),
+        };
     if addresses.is_empty() {
         return Err("DNS returned no addresses".into());
     };
     if !allow_private && addresses.iter().any(|x| !is_public_ip(x.ip())) {
         return Err("private or reserved HTTP address blocked".into());
     };
-    Client::builder()
+    let mut builder = Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(15))
-        .resolve_to_addrs(host, &addresses)
-        .build()
-        .map_err(|e| e.to_string())
+        .timeout(Duration::from_secs(15));
+    if let Some(name) = domain {
+        builder = builder.resolve_to_addrs(name, &addresses);
+    }
+    builder.build().map_err(|e| e.to_string())
 }
 
 fn string_config<'a>(config: &'a Value, key: &str) -> Result<&'a str> {
