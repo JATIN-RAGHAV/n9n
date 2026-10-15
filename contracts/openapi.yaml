@@ -202,6 +202,17 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/Run'}
         default: {$ref: '#/components/responses/Error'}
+  /runs/{id}/replay:
+    parameters:
+      - {$ref: '#/components/parameters/id'}
+    post:
+      operationId: replayRun
+      summary: Queue a replay of a finished run from a chosen node
+      description: Creates a run with kind replay, parent_run_id and resume_from_node set. Succeeded steps of every node that is not downstream of from_node are copied from the parent so the worker reuses their outputs; input_override replaces the feeder node's copied output, or the run input when from_node is the trigger. graph draft validates and snapshots the current draft without publishing it. Returns 400 when from_node is not in the chosen graph or the draft fails validation, 404 for another user's run and 409 while the parent is still queued or running.
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReplayRequest'}}}}
+      responses:
+        '200': {$ref: '#/components/responses/Run'}
+        default: {$ref: '#/components/responses/Error'}
   /credentials:
     get:
       operationId: listCredentials
@@ -404,7 +415,8 @@ components:
     RunList: {type: object, required: [runs], properties: {runs: {type: array, items: {$ref: '#/components/schemas/Run'}}}}
     Step: {type: object, required: [node_id, status, input, output, attempt, created_at], properties: {node_id: {type: string}, status: {type: string, enum: [running, succeeded, failed, skipped]}, input: {}, output: {}, error: {type: string}, branch: {type: string, enum: ['true', 'false']}, attempt: {type: integer, description: Execution attempt of the node; increases when a run resumes}, started_at: {type: string, format: date-time}, finished_at: {type: string, format: date-time, description: Set by the server for every terminal step}, duration_ms: {type: integer, minimum: 0}, attempts: {type: array, description: HTTP requests the node made (present on the node's latest step only), items: {$ref: '#/components/schemas/StepAttempt'}}, created_at: {type: string, format: date-time}}}
     StepAttempt: {type: object, required: [attempt, status, duration_ms, created_at], properties: {attempt: {type: integer, minimum: 1}, status: {type: string, enum: [succeeded, failed]}, http_status: {type: integer, minimum: 100, maximum: 599}, error: {type: string}, duration_ms: {type: integer, minimum: 0}, created_at: {type: string, format: date-time}}}
-    RunDetail: {type: object, required: [run, steps, node_types], properties: {run: {$ref: '#/components/schemas/Run'}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}, node_types: {type: object, additionalProperties: {type: string}}}}
+    RunDetail: {type: object, required: [run, steps, node_types, graph, children], properties: {run: {$ref: '#/components/schemas/Run'}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}, node_types: {type: object, additionalProperties: {type: string}}, graph: {$ref: '#/components/schemas/Graph', description: The graph the run executed (its snapshot or published version)}, children: {type: array, description: Replay and shadow runs that came from this run, items: {$ref: '#/components/schemas/Run'}}}}
+    ReplayRequest: {type: object, required: [from_node], properties: {from_node: {type: string, description: The node the replay starts at; it and everything downstream execute again}, input_override: {type: object, additionalProperties: true, description: Replaces the input from_node receives}, graph: {type: string, enum: [original, draft], default: original}}}
     Credential: {type: object, required: [id, name, kind, created_at], properties: {id: {type: string}, name: {type: string}, kind: {type: string}, created_at: {type: string, format: date-time}}}
     PrivateCredential: {type: object, required: [id, name, kind, data], properties: {id: {type: string}, name: {type: string}, kind: {type: string}, data: {type: object, additionalProperties: true}}}
     CredentialCreate: {type: object, required: [name, kind, data], properties: {name: {type: string, maxLength: 200}, kind: {type: string, maxLength: 100}, data: {type: object, additionalProperties: true}}}

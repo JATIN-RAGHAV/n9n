@@ -17,6 +17,10 @@ All actions receive the output of their single incoming edge as `input`. `{{inpu
 
 HTTP request destinations resolve to public IP addresses by default (`ALLOW_PRIVATE_HTTP=false`). Redirects are not followed. `idempotency_key` must be a nonempty string when supplied; use a unique value for each logical event, such as `{{input.id}}`, rather than a constant shared by all runs. GET, HEAD and idempotent requests are retried up to three times on a 5xx response or a transport failure; every request is recorded as a step attempt (`attempts` on the node's latest step in run detail) with its status code, error and duration.
 
+## Replay
+
+`POST /api/runs/{id}/replay` with `{from_node, input_override?, graph}` queues a `replay` run of a finished run. The worker's resume path does the work: succeeded steps of every node that is not downstream of `from_node` are copied into the new run, so those nodes keep their recorded outputs and only `from_node` and its descendants execute. `input_override` replaces the copied output of the node feeding `from_node` (or the run input when `from_node` is the trigger), so the replayed node sees the edited input. A copied condition keeps its recorded branch. With `graph: "draft"` the saved draft is validated like Test draft and snapshotted; the workflow stays unpublished. Copied steps carry no timing. Run detail returns the executed `graph` and the `children` replays of a run. Clients warn before a replay that would execute `http_request` or `send_email` nodes again.
+
 ## Run kinds and step timing
 
 Runs carry a `kind`: `normal` (a published version), `test` (the saved draft), `replay` (re-run from a chosen node of an earlier run, linked through `parent_run_id` and `resume_from_node`) or `shadow` (a draft candidate paired with a live run). Only `normal` runs reference a published version; the others store a `graph_snapshot`. The `test` boolean remains as a mirror of `kind == "test"` for older clients. Each step records `started_at`, `finished_at` and `duration_ms`; runners that omit timing still work.
