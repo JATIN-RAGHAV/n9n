@@ -738,6 +738,9 @@ async fn execute_inner(
         let mut branch = String::new();
         let mut output = Value::Null;
         if skip {
+            // A replay may carry this node's output from the parent run; once
+            // the node is skipped here, mappings must not see it.
+            outputs.remove(&node_id);
             if already != Some("skipped") {
                 api.step(
                     job,

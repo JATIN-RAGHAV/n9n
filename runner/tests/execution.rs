@@ -289,6 +289,47 @@ async fn resume_follows_the_recorded_branch_of_a_copied_condition() {
     );
 }
 
+async fn cross_branch_failure(saved: Value) -> String {
+    // "no" reads the output of its sibling "yes", which only exists when the
+    // true branch ran. The graph is not publishable, but it isolates the rule.
+    let (api, _seen) = mock_backend().await;
+    let job: Job = serde_json::from_value(json!({
+        "id":"run1","lease_token":"lease1","workflow_id":"wf1","version":1,
+        "input":{"score":1},
+        "steps":saved,
+        "graph":{"nodes":[
+            {"id":"start","type":"manual_trigger","config":{}},
+            {"id":"gate","type":"condition","config":{"left":"{{input.score}}","operator":"greater_than","right":5}},
+            {"id":"yes","type":"set_fields","config":{"fields":{"answer":"yes"}}},
+            {"id":"no","type":"set_fields","config":{"fields":{"copied":"{{nodes.yes.answer}}"}}}
+        ],"edges":[
+            {"id":"a","source":"start","target":"gate","source_port":"out"},
+            {"id":"b","source":"gate","target":"yes","source_port":"true"},
+            {"id":"c","source":"gate","target":"no","source_port":"false"}
+        ]}
+    }))
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), execute(&api, job, false))
+        .await
+        .unwrap()
+        .unwrap_err()
+}
+
+#[tokio::test]
+async fn skipped_nodes_do_not_satisfy_mappings_even_when_their_output_was_copied() {
+    let fresh = cross_branch_failure(json!([])).await;
+    assert_eq!(fresh, "missing node output yes");
+    // A replay seeded with "yes" from an earlier run that took the true
+    // branch: "yes" is skipped here, so its copied output must disappear.
+    let replayed = cross_branch_failure(json!([
+        {"node_id":"start","status":"succeeded","output":{"score":1},"branch":"","attempt":1},
+        {"node_id":"gate","status":"succeeded","output":{"score":1},"branch":"false","attempt":1},
+        {"node_id":"yes","status":"succeeded","output":{"score":9,"answer":"yes"},"branch":"","attempt":1}
+    ]))
+    .await;
+    assert_eq!(replayed, fresh);
+}
+
 /// An HTTP target that answers every connection with the same status line.
 async fn fixed_target(status: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
