@@ -1144,6 +1144,8 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
               : 'No steps were recorded.'),
         ...steps.asMap().entries.map((entry) {
           final step = entry.value;
+          final duration = step['duration_ms'];
+          final attempts = asJsonList(step['attempts']);
           return Card(
               color: context.palette.panel,
               elevation: 0,
@@ -1156,13 +1158,20 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                           : context.palette.panelRaised,
                       child: Text('${entry.key + 1}',
                           style: TextStyle(color: context.palette.ink))),
-                  title: Text(
-                      nodeTypes.containsKey('${step['node_id']}')
-                          ? '${nodeLabel(nodeTypes['${step['node_id']}']!)} · ${step['node_id']}'
-                          : '${step['node_id'] ?? 'Step'}',
-                      style: TextStyle(fontWeight: FontWeight.w700)),
+                  title: Row(children: [
+                    Expanded(
+                        child: Text(
+                            nodeTypes.containsKey('${step['node_id']}')
+                                ? '${nodeLabel(nodeTypes['${step['node_id']}']!)} · ${step['node_id']}'
+                                : '${step['node_id'] ?? 'Step'}',
+                            style: TextStyle(fontWeight: FontWeight.w700))),
+                    if (duration is num) ...[
+                      const SizedBox(width: 10),
+                      DurationBadge(duration.toInt())
+                    ],
+                  ]),
                   subtitle: Text(
-                      '${step['status'] == 'running' && run['status'] != 'running' ? 'interrupted' : step['status'] ?? 'completed'} · attempt ${step['attempt'] ?? 1}'),
+                      '${step['status'] == 'running' && run['status'] != 'running' ? 'interrupted' : step['status'] ?? 'completed'} · attempt ${step['attempt'] ?? 1}${attempts.length > 1 ? ' · ${attempts.length} requests' : ''}'),
                   children: [
                     Padding(
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -1176,13 +1185,77 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                               JsonBlock(
                                   'INPUT', step['input'] ?? step['input_json']),
                               JsonBlock('OUTPUT',
-                                  step['output'] ?? step['output_json'])
+                                  step['output'] ?? step['output_json']),
+                              if (attempts.isNotEmpty) AttemptList(attempts),
                             ]))
                   ]));
         }),
       ],
     ]);
   }
+}
+
+String formatDurationMs(int ms) => ms < 1000
+    ? '$ms ms'
+    : ms < 60000
+        ? '${(ms / 1000).toStringAsFixed(ms < 10000 ? 1 : 0)} s'
+        : '${(ms / 60000).toStringAsFixed(1)} min';
+
+class DurationBadge extends StatelessWidget {
+  const DurationBadge(this.ms, {super.key});
+  final int ms;
+  @override
+  Widget build(BuildContext context) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+          color: context.palette.panelRaised,
+          borderRadius: BorderRadius.circular(8)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.timer_outlined, size: 13, color: context.palette.muted),
+        const SizedBox(width: 4),
+        Text(formatDurationMs(ms),
+            style: TextStyle(
+                color: context.palette.muted,
+                fontSize: 11,
+                fontWeight: FontWeight.w700))
+      ]));
+}
+
+/// Every HTTP request a step made, so retries and their status codes show.
+class AttemptList extends StatelessWidget {
+  const AttemptList(this.attempts, {super.key});
+  final List<Json> attempts;
+  @override
+  Widget build(BuildContext context) => Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: Text('ATTEMPTS (${attempts.length})', style: fieldLabel),
+          children: attempts.map((attempt) {
+            final succeeded = attempt['status'] == 'succeeded';
+            final error = '${attempt['error'] ?? ''}';
+            final duration = attempt['duration_ms'];
+            return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                    succeeded
+                        ? Icons.check_circle_outline
+                        : Icons.error_outline,
+                    color: succeeded ? pine : coral,
+                    size: 18),
+                title: Text([
+                  'Attempt ${attempt['attempt'] ?? '?'}',
+                  '${attempt['status'] ?? ''}',
+                  if (attempt['http_status'] != null)
+                    'HTTP ${attempt['http_status']}',
+                  if (duration is num) formatDurationMs(duration.toInt()),
+                ].join(' · ')),
+                subtitle: error.isEmpty
+                    ? null
+                    : Text(error,
+                        style: TextStyle(color: context.palette.accentText)));
+          }).toList()));
 }
 
 class InfoDatum extends StatelessWidget {
