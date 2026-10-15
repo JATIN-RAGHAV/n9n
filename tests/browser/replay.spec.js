@@ -79,7 +79,9 @@ test('a failed run is replayed from its failing step with a corrected input', as
   const dialog = page.getByRole('alertdialog');
   await replaceFlutterText(page, dialog.getByRole('textbox'), '{"stamped":"yes","absent":{"value":7}}');
   await dialog.getByRole('button', { name: 'Start replay' }).click();
-  await expect(page).toHaveURL(/\/runs\/[0-9a-f]+/);
+  // The parent's URL already matches /runs/<id>, so wait until it changes.
+  await expect(page).not.toHaveURL(new RegExp(`/runs/${parentId}$`));
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f]+$/);
   const replayId = currentRoute(page).split('/').at(-1);
   expect(replayId).not.toBe(parentId);
   await expect.poll(() => runStatus(page, replayId)).toBe('succeeded');
