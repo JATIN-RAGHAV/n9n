@@ -4,7 +4,9 @@ Run `make up`, then `python3 tests/e2e_smoke.py`. The script uses Python's stand
 
 Run `python3 tests/restart_smoke.py` to verify a queued run survives a backend restart and executes its original published graph version after the runner returns. This test temporarily stops the runner and restores it in a `finally` block. It creates a unique test account and workflow.
 
-The browser smoke in `tests/browser` exercises the Flutter Wasm UI; see its README for setup.
+Run `python3 tests/replay_smoke.py` to verify time-travel replay: a branching workflow is replayed from its condition with a changed input so the other branch runs, the upstream steps are copied from the parent run, and a replay against an edited draft uses the new configuration without publishing. It imports helpers from `e2e_smoke.py`, so run it from the repository root or from `tests/`.
+
+The browser smoke in `tests/browser` exercises the Flutter Wasm UI; see its README for setup. `replay.spec.js` replays a failed draft test from the run inspector.
 
 Backend integration tests use real PostgreSQL and isolated schemas. Run `make test-backend` for the local Compose database, or set `TEST_DATABASE_URL` explicitly; CI provisions its own PostgreSQL service.
 
