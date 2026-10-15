@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // openAtVersion prepares a database at the given schema version, as an older
@@ -196,6 +197,9 @@ func TestHTTPAttemptsAreStoredAndNestedUnderSteps(t *testing.T) {
 		status, value, _ = request(t, s, nil, "POST", "/internal/jobs/"+rid+"/attempts", map[string]any{"lease_token": lease, "node_id": "call", "attempt": i + 1, "status": state, "http_status": code, "error": "", "duration_ms": 12 * (i + 1)}, true)
 		requireOK(t, status, value)
 	}
+	// A long multibyte error is cut on a character boundary, never rejected.
+	status, value, _ = request(t, s, nil, "POST", "/internal/jobs/"+rid+"/attempts", map[string]any{"lease_token": lease, "node_id": "call", "attempt": 4, "status": "failed", "error": strings.Repeat("é", 3000), "duration_ms": 1}, true)
+	requireOK(t, status, value)
 	step("call", "succeeded")
 	for _, bad := range []map[string]any{
 		{"lease_token": lease, "node_id": "call", "attempt": 0, "status": "failed", "error": "", "duration_ms": 1},
@@ -220,8 +224,12 @@ func TestHTTPAttemptsAreStoredAndNestedUnderSteps(t *testing.T) {
 		t.Fatalf("running step carries attempts: %#v", steps[1])
 	}
 	attempts := steps[2].(map[string]any)["attempts"].([]any)
-	if len(attempts) != 3 {
+	if len(attempts) != 4 {
 		t.Fatalf("attempts: %#v", attempts)
+	}
+	long := attempts[3].(map[string]any)["error"].(string)
+	if !utf8.ValidString(long) || len(long) > 4096 || len(long) < 4090 || !strings.HasSuffix(long, "é") {
+		t.Fatalf("truncated error: %d bytes, valid=%v", len(long), utf8.ValidString(long))
 	}
 	first, last := attempts[0].(map[string]any), attempts[2].(map[string]any)
 	if first["attempt"] != float64(1) || first["status"] != "failed" || first["http_status"] != float64(500) || first["duration_ms"] != float64(12) {

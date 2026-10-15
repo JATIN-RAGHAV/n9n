@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func (s *Server) internal(w http.ResponseWriter, r *http.Request, p []string) {
@@ -182,9 +183,7 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 			fail(w, 400, "invalid http_status")
 			return
 		}
-		if len(a.Error) > 4096 {
-			a.Error = a.Error[:4096]
-		}
+		a.Error = truncateUTF8(a.Error, 4096)
 		var graphStr string
 		e := s.db.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1 AND r.status='running' AND r.lease_token=$2 AND r.lease_until>$3`, runID, a.LeaseToken, now()).Scan(&graphStr)
 		if e != nil {
@@ -238,6 +237,19 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 		return
 	}
 	fail(w, 404, "not found")
+}
+
+// truncateUTF8 shortens s to at most max bytes without splitting a character,
+// which PostgreSQL would reject as invalid text.
+func truncateUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 func (s *Server) claim(runner string) (any, error) {
 	tx, e := s.db.Begin()

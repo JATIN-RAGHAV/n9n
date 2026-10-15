@@ -503,6 +503,19 @@ pub async fn http_node_with_attempts(
     let result = http_request_loop(config, input, outputs, allow_private, &mut attempts).await;
     (result, attempts)
 }
+/// Attempt errors can quote a whole response body; keep reports small and
+/// cut on a character boundary so the backend stores valid text.
+fn cap_error(error: &str) -> String {
+    const LIMIT: usize = 4096;
+    if error.len() <= LIMIT {
+        return error.to_string();
+    }
+    let mut cut = LIMIT;
+    while !error.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    error[..cut].to_string()
+}
 async fn read_body(res: &mut reqwest::Response, ambiguous: bool) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     loop {
@@ -564,7 +577,7 @@ async fn http_request_loop(
                 attempt: tries,
                 status,
                 http_status,
-                error: error.to_string(),
+                error: cap_error(error),
                 duration_ms: started.elapsed().as_millis() as u64,
             })
         };
@@ -1103,6 +1116,14 @@ mod tests {
             "http_request",
             &json!({"method":"post","idempotency_key":""})
         ))
+    }
+    #[test]
+    fn attempt_errors_are_capped_on_character_boundaries() {
+        let short = "HTTP 500: nope";
+        assert_eq!(cap_error(short), short);
+        let long = cap_error(&"é".repeat(3000));
+        assert!(long.len() <= 4096 && long.len() >= 4090, "{}", long.len());
+        assert!(long.chars().all(|c| c == 'é'));
     }
     #[test]
     fn render_limits_expansion_and_depth() {
