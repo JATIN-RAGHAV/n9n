@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Modal, Pressable, RefreshControl, ScrollView, View } from 'react-native';
 import { Api, ApiError } from './api';
+import { attemptSummary, formatDurationMs } from './format';
 import { Action, Chip, ErrorText, Field, Label, Panel, usePalette } from './theme';
-import { Credential, JsonObject, Run, Session, Step, Workflow } from './types';
+import { Credential, JsonObject, Run, Session, Step, StepAttempt, Workflow } from './types';
 
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function fail(error: unknown, onUnauthorized: () => void, setError: (value: string) => void) {
@@ -148,9 +149,25 @@ export function RunsScreen({ api, onOpen, onUnauthorized }: {
   </ScrollView>;
 }
 
+function AttemptList({ attempts }: { attempts: StepAttempt[] }) {
+  const p = usePalette();
+  const [open, setOpen] = useState(false);
+  return <View style={{ marginTop: 15 }}>
+    <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => setOpen(!open)}>
+      <Label muted size={11} bold>{open ? '▾' : '▸'} ATTEMPTS ({attempts.length})</Label>
+    </Pressable>
+    {open && attempts.map(attempt => <View key={attempt.attempt} style={{ marginTop: 9, paddingLeft: 10,
+      borderLeftWidth: 2, borderLeftColor: attempt.status === 'succeeded' ? p.red : p.border }}>
+      <Label size={12}>{attemptSummary(attempt)}</Label>
+      {attempt.error ? <Label size={12} style={{ marginTop: 3, color: p.redText }}>{attempt.error}</Label> : null}
+    </View>)}
+  </View>;
+}
+
 export function RunDetailScreen({ api, runId, onUnauthorized }: {
   api: Api; runId: string; onUnauthorized: () => void;
 }) {
+  const p = usePalette();
   const [run, setRun] = useState<Run | null>(null);
   const [steps, setSteps] = useState<Step[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -182,13 +199,19 @@ export function RunDetailScreen({ api, runId, onUnauthorized }: {
     <Label size={19} bold style={{ marginTop: 25, marginBottom: 10 }}>Steps</Label>
     {[...latest.values()].map(step => <Panel key={step.node_id} style={{ marginBottom: 10 }}>
       <Pressable accessibilityRole="button" onPress={() => setExpanded(expanded === step.node_id ? null : step.node_id)}>
-        <Label bold>{step.node_id} · {step.status}</Label>
-        <Label muted size={12} style={{ marginTop: 5 }}>Attempt {step.attempt || 1} · {expanded === step.node_id ? 'Hide' : 'View'} input/output</Label>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Label bold style={{ flex: 1 }}>{step.node_id} · {step.status}</Label>
+          {typeof step.duration_ms === 'number' && <View style={{ backgroundColor: p.raised, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 }}>
+            <Label muted size={11} bold>⏱ {formatDurationMs(step.duration_ms)}</Label>
+          </View>}
+        </View>
+        <Label muted size={12} style={{ marginTop: 5 }}>Attempt {step.attempt || 1}{(step.attempts?.length ?? 0) > 1 ? ` · ${step.attempts!.length} requests` : ''} · {expanded === step.node_id ? 'Hide' : 'View'} input/output</Label>
       </Pressable>
       {expanded === step.node_id && <View style={{ marginTop: 12 }}>
         <Label muted size={11} bold>INPUT</Label><Label size={12} style={{ marginTop: 5, fontFamily: 'monospace' }}>{JSON.stringify(step.input ?? null, null, 2)}</Label>
         <Label muted size={11} bold style={{ marginTop: 15 }}>OUTPUT</Label><Label size={12} style={{ marginTop: 5, fontFamily: 'monospace' }}>{JSON.stringify(step.output ?? null, null, 2)}</Label>
         {step.error && <ErrorText message={step.error} />}
+        {(step.attempts?.length ?? 0) > 0 && <AttemptList attempts={step.attempts!} />}
       </View>}
     </Panel>)}
     {latest.size === 0 && <Label muted>No steps recorded yet.</Label>}

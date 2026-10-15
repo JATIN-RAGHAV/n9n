@@ -28,15 +28,28 @@ export type Workflow = {
   created_at?: string;
   updated_at?: string;
 };
+export type RunKind = 'normal' | 'test' | 'replay' | 'shadow';
 export type Run = {
   id: string;
   workflow_id: string;
   status: string;
+  kind?: RunKind;
   test?: boolean;
+  parent_run_id?: string | null;
+  resume_from_node?: string;
   error?: string | null;
   version?: number;
   created_at?: string;
   updated_at?: string;
+};
+/** One HTTP request a step made; retries produce several per step. */
+export type StepAttempt = {
+  attempt: number;
+  status: 'succeeded' | 'failed';
+  http_status?: number | null;
+  error?: string;
+  duration_ms: number;
+  created_at?: string;
 };
 export type Step = {
   id?: string;
@@ -46,6 +59,10 @@ export type Step = {
   input?: Json;
   output?: Json;
   error?: string | null;
+  started_at?: string;
+  finished_at?: string;
+  duration_ms?: number | null;
+  attempts?: StepAttempt[];
 };
 export type Credential = { id: string; name: string; kind: string; created_at?: string };
 export type User = { id: string; email: string };
