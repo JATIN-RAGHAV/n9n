@@ -185,10 +185,21 @@ export function RunDetailScreen({ api, runId, onOpenRun, onUnauthorized }: {
       setRun(result.run); setSteps(result.steps); setGraph(result.graph ?? null); setChildren(result.children ?? []); setError(null);
     } catch (e) { fail(e, onUnauthorized, setError); }
   }, [api, runId, onUnauthorized]);
-  const openReplay = (step: Step, draft = false) => setReplay({
-    step, graph: draft ? 'draft' : 'original', error: null,
-    input: JSON.stringify(step.input && typeof step.input === 'object' && !Array.isArray(step.input) ? step.input : {}, null, 2),
-  });
+  // The current draft, fetched once it is chosen so the warning reflects it.
+  const [draftGraph, setDraftGraph] = useState<Draft | null>(null);
+  const [draftFailed, setDraftFailed] = useState(false);
+  const loadDraft = async () => {
+    if (draftGraph || !run) return;
+    try { setDraftGraph((await api.workflow(run.workflow_id)).workflow.draft); }
+    catch (e) { fail(e, onUnauthorized, () => setDraftFailed(true)); }
+  };
+  const openReplay = (step: Step, draft = false) => {
+    setReplay({
+      step, graph: draft ? 'draft' : 'original', error: null,
+      input: JSON.stringify(step.input && typeof step.input === 'object' && !Array.isArray(step.input) ? step.input : {}, null, 2),
+    });
+    if (draft) loadDraft();
+  };
   const startReplay = async () => {
     if (!replay) return;
     let edited: JsonObject;
@@ -206,7 +217,13 @@ export function RunDetailScreen({ api, runId, onOpenRun, onUnauthorized }: {
       onOpenRun?.(result.run.id);
     } catch (e) { setReplay({ ...replay, error: message(e) }); }
   };
-  const effects = replay && graph ? downstreamNodes(graph, replay.step.node_id).filter(n => SIDE_EFFECT_TYPES.includes(n.type)) : [];
+  const effectGraph = replay?.graph === 'draft' ? draftGraph : graph;
+  const effects = replay && effectGraph ? downstreamNodes(effectGraph, replay.step.node_id).filter(n => SIDE_EFFECT_TYPES.includes(n.type)) : [];
+  const warning = !replay ? null
+    : replay.graph === 'draft' && draftFailed ? 'The current draft could not be loaded, so this replay may execute HTTP or Gmail nodes again.'
+    : replay.graph === 'draft' && !draftGraph ? 'Loading the current draft to check which actions it would run…'
+    : effects.length > 0 ? `This replay executes ${effects.map(n => `${n.type} · ${n.id}`).join(', ')}. These actions reach external services again.`
+    : null;
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {
     if (!run || !['queued', 'running'].includes(run.status)) return;
@@ -271,11 +288,11 @@ export function RunDetailScreen({ api, runId, onOpenRun, onUnauthorized }: {
         <Label muted size={11} bold style={{ marginBottom: 6, letterSpacing: 1 }}>GRAPH</Label>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 12 }}>
           <Chip title="Original graph" selected={replay.graph === 'original'} onPress={() => setReplay({ ...replay, graph: 'original' })} />
-          <Chip title="Current draft" selected={replay.graph === 'draft'} onPress={() => setReplay({ ...replay, graph: 'draft' })} />
+          <Chip title="Current draft" selected={replay.graph === 'draft'} onPress={() => { setReplay({ ...replay, graph: 'draft' }); loadDraft(); }} />
         </View>
         <Field label="Input JSON" value={replay.input} onChangeText={input => setReplay({ ...replay, input })} multiline />
-        {effects.length > 0 && <View style={{ backgroundColor: p.dangerBg, borderRadius: 10, padding: 12, marginBottom: 12 }}>
-          <Label size={12} style={{ color: p.redText }}>This replay executes {effects.map(n => `${n.type} · ${n.id}`).join(', ')}. These actions reach external services again.</Label>
+        {warning && <View style={{ backgroundColor: p.dangerBg, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+          <Label size={12} style={{ color: p.redText }}>{warning}</Label>
         </View>}
         <ErrorText message={replay.error} />
         <Action title="Start replay" onPress={startReplay} />
