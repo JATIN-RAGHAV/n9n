@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { addNode, connect, removeNode, validateDraft } from '../src/graph';
+import { addNode, connect, downstreamNodes, removeNode, validateDraft } from '../src/graph';
 import { Draft } from '../src/types';
 
 const empty: Draft = { nodes: [], edges: [] };
@@ -36,4 +36,18 @@ test('only one trigger can be added and conditions select a branch port', () => 
   assert.throws(() => connect(withActions, withActions.nodes[1].id, withActions.nodes[2].id, 'out'), /true or false/);
   const connected = connect(withActions, withActions.nodes[1].id, withActions.nodes[2].id, 'false');
   assert.equal(connected.edges[0].source_port, 'false');
+});
+
+test('downstream nodes list the replayed step and everything after it', () => {
+  let draft = node(empty, 'manual_trigger');
+  draft = node(draft, 'condition');
+  draft = node(draft, 'set_fields');
+  draft = node(draft, 'set_fields');
+  const [trigger, gate, yes, no] = draft.nodes;
+  draft = connect(draft, trigger.id, gate.id, 'out');
+  draft = connect(draft, gate.id, yes.id, 'true');
+  draft = connect(draft, gate.id, no.id, 'false');
+  assert.deepEqual(downstreamNodes(draft, gate.id).map(n => n.id), [gate.id, yes.id, no.id]);
+  assert.deepEqual(downstreamNodes(draft, yes.id).map(n => n.id), [yes.id]);
+  assert.deepEqual(downstreamNodes(draft, 'ghost'), []);
 });

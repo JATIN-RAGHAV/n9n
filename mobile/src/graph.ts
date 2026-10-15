@@ -69,3 +69,22 @@ export function validateDraft(draft: Draft): string | null {
   }
   return null;
 }
+
+/** Node types whose execution reaches external services. */
+export const SIDE_EFFECT_TYPES: NodeType[] = ['http_request', 'send_email'];
+
+/** The node `from` and everything downstream of it: what a replay re-runs. */
+export function downstreamNodes(draft: Draft, from: string): WorkflowNode[] {
+  const byId = new Map(draft.nodes.map(n => [n.id, n]));
+  const seen = new Set<string>();
+  const order: WorkflowNode[] = [];
+  const visit = (id: string) => {
+    const node = byId.get(id);
+    if (!node || seen.has(id)) return;
+    seen.add(id);
+    order.push(node);
+    for (const edge of draft.edges) if (edge.source === id) visit(edge.target);
+  };
+  visit(from);
+  return order;
+}

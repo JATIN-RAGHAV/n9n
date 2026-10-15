@@ -136,8 +136,8 @@ function AppContent() {
                 onUnauthorized={onUnauthorized} /> :
               screen.kind === 'runs' ? <RunsScreen api={api} onOpen={id => navigate({ kind: 'run', id })}
                 onUnauthorized={onUnauthorized} /> :
-              screen.kind === 'run' ? <RunDetailScreen api={api} runId={screen.id}
-                onUnauthorized={onUnauthorized} /> :
+              screen.kind === 'run' ? <RunDetailScreen key={screen.id} api={api} runId={screen.id}
+                onOpenRun={id => navigate({ kind: 'run', id })} onUnauthorized={onUnauthorized} /> :
               screen.kind === 'credentials' ? <CredentialsScreen api={api} onUnauthorized={onUnauthorized} /> :
               <SettingsScreen apiUrl={apiUrl} onChangeUrl={onChangeUrl} onLogout={onLogout} />}
           </View>

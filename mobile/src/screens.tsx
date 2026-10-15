@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Modal, Pressable, RefreshControl, ScrollView, View } from 'react-native';
 import { Api, ApiError } from './api';
 import { attemptSummary, formatDurationMs } from './format';
+import { SIDE_EFFECT_TYPES, downstreamNodes } from './graph';
 import { Action, Chip, ErrorText, Field, Label, Panel, usePalette } from './theme';
-import { Credential, JsonObject, Run, Session, Step, StepAttempt, Workflow } from './types';
+import { Credential, Draft, JsonObject, Run, Session, Step, StepAttempt, Workflow } from './types';
 
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function fail(error: unknown, onUnauthorized: () => void, setError: (value: string) => void) {
@@ -164,18 +165,48 @@ function AttemptList({ attempts }: { attempts: StepAttempt[] }) {
   </View>;
 }
 
-export function RunDetailScreen({ api, runId, onUnauthorized }: {
-  api: Api; runId: string; onUnauthorized: () => void;
+const FINISHED = ['succeeded', 'failed', 'cancelled', 'uncertain'];
+
+export function RunDetailScreen({ api, runId, onOpenRun, onUnauthorized }: {
+  api: Api; runId: string; onOpenRun?: (id: string) => void; onUnauthorized: () => void;
 }) {
   const p = usePalette();
   const [run, setRun] = useState<Run | null>(null);
   const [steps, setSteps] = useState<Step[]>([]);
+  const [graph, setGraph] = useState<Draft | null>(null);
+  const [children, setChildren] = useState<Run[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  // The step being replayed, with the editable input and graph choice.
+  const [replay, setReplay] = useState<{ step: Step; input: string; graph: 'original' | 'draft'; error: string | null } | null>(null);
   const refresh = useCallback(async () => {
-    try { const result = await api.run(runId); setRun(result.run); setSteps(result.steps); setError(null); }
-    catch (e) { fail(e, onUnauthorized, setError); }
+    try {
+      const result = await api.run(runId);
+      setRun(result.run); setSteps(result.steps); setGraph(result.graph ?? null); setChildren(result.children ?? []); setError(null);
+    } catch (e) { fail(e, onUnauthorized, setError); }
   }, [api, runId, onUnauthorized]);
+  const openReplay = (step: Step, draft = false) => setReplay({
+    step, graph: draft ? 'draft' : 'original', error: null,
+    input: JSON.stringify(step.input && typeof step.input === 'object' && !Array.isArray(step.input) ? step.input : {}, null, 2),
+  });
+  const startReplay = async () => {
+    if (!replay) return;
+    let edited: JsonObject;
+    try {
+      const value = JSON.parse(replay.input);
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('object');
+      edited = value as JsonObject;
+    } catch { setReplay({ ...replay, error: 'Enter a valid JSON object.' }); return; }
+    const original = replay.step.input && typeof replay.step.input === 'object' && !Array.isArray(replay.step.input) ? replay.step.input : {};
+    const changed = JSON.stringify(edited) !== JSON.stringify(original);
+    try {
+      const result = await api.replay(runId, { from_node: replay.step.node_id, graph: replay.graph,
+        ...(changed ? { input_override: edited } : {}) });
+      setReplay(null);
+      onOpenRun?.(result.run.id);
+    } catch (e) { setReplay({ ...replay, error: message(e) }); }
+  };
+  const effects = replay && graph ? downstreamNodes(graph, replay.step.node_id).filter(n => SIDE_EFFECT_TYPES.includes(n.type)) : [];
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {
     if (!run || !['queued', 'running'].includes(run.status)) return;
@@ -183,18 +214,33 @@ export function RunDetailScreen({ api, runId, onUnauthorized }: {
   }, [run?.status, refresh]);
   const latest = new Map<string, Step>();
   for (const step of steps) latest.set(step.node_id, step);
+  const ordered = [...latest.values()];
+  const failedStep = ordered.find(step => step.status === 'failed') ?? ordered[ordered.length - 1];
+  const canReplay = !!run && FINISHED.includes(run.status) && ordered.length > 0;
   const cancel = async () => { try { await api.cancelRun(runId); await refresh(); }
     catch (e) { fail(e, onUnauthorized, setError); } };
+  const mode = run?.kind === 'replay' ? `REPLAY FROM ${run.resume_from_node ?? ''} · ` : run?.kind === 'shadow' ? 'SHADOW · ' : run?.test ? 'DRAFT TEST · ' : '';
   return <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 55 }}>
     <Label size={27} bold>Run inspector</Label><Label muted size={12} style={{ marginTop: 5 }}>{runId}</Label>
     <ErrorText message={error} />
     {!run && !error && <ActivityIndicator style={{ marginTop: 30 }} />}
     {run && <><Panel style={{ marginTop: 18 }}>
-      <Label size={18} bold>{run.test ? 'DRAFT TEST · ' : ''}{run.status.toUpperCase()} · {run.test ? 'draft snapshot' : `v${run.version || '?'}`}</Label>
+      <Label size={18} bold>{mode}{run.status.toUpperCase()} · {run.kind && run.kind !== 'normal' ? 'snapshot' : `v${run.version || '?'}`}</Label>
       <Label muted size={12} style={{ marginTop: 8 }}>Created {run.created_at || '—'}</Label>
       <Label muted size={12}>Updated {run.updated_at || '—'}</Label>
       {run.error && <ErrorText message={run.error} />}
       {['queued', 'running'].includes(run.status) && <View style={{ marginTop: 12 }}><Action danger title="Cancel run" onPress={cancel} /></View>}
+      {canReplay && ['failed', 'uncertain'].includes(run.status) && <View style={{ marginTop: 12 }}>
+        <Action title="Replay against current draft" onPress={() => openReplay(failedStep, true)} /></View>}
+      {run.parent_run_id && onOpenRun && <View style={{ marginTop: 10 }}>
+        <Action secondary small title={`Replay of ${run.parent_run_id.slice(0, 8)}`} onPress={() => onOpenRun(run.parent_run_id!)} /></View>}
+      {children.length > 0 && <View style={{ marginTop: 12 }}>
+        <Label muted size={11} bold>REPLAYS</Label>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 }}>
+          {children.map(child => <Chip key={child.id} title={`${child.id.slice(0, 8)} · ${child.status}`} selected={false}
+            onPress={() => onOpenRun?.(child.id)} />)}
+        </View>
+      </View>}
     </Panel>
     <Label size={19} bold style={{ marginTop: 25, marginBottom: 10 }}>Steps</Label>
     {[...latest.values()].map(step => <Panel key={step.node_id} style={{ marginBottom: 10 }}>
@@ -212,11 +258,30 @@ export function RunDetailScreen({ api, runId, onUnauthorized }: {
         <Label muted size={11} bold style={{ marginTop: 15 }}>OUTPUT</Label><Label size={12} style={{ marginTop: 5, fontFamily: 'monospace' }}>{JSON.stringify(step.output ?? null, null, 2)}</Label>
         {step.error && <ErrorText message={step.error} />}
         {(step.attempts?.length ?? 0) > 0 && <AttemptList attempts={step.attempts!} />}
+        {canReplay && <View style={{ marginTop: 14 }}><Action secondary small title="Re-run from here" onPress={() => openReplay(step)} /></View>}
       </View>}
     </Panel>)}
     {latest.size === 0 && <Label muted>No steps recorded yet.</Label>}
     <View style={{ marginTop: 8 }}><Action secondary title="Refresh" onPress={refresh} /></View>
     </>}
+    <Modal visible={replay !== null} animationType="slide" onRequestClose={() => setReplay(null)}>
+      {replay && <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ flexGrow: 1, padding: 20, backgroundColor: p.bg }}>
+        <Label size={23} bold>Re-run from {replay.step.node_id}</Label>
+        <Label muted size={12} style={{ marginTop: 7, marginBottom: 16 }}>Steps before this one keep their recorded outputs. Edit the input this step receives, then start the replay.</Label>
+        <Label muted size={11} bold style={{ marginBottom: 6, letterSpacing: 1 }}>GRAPH</Label>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 12 }}>
+          <Chip title="Original graph" selected={replay.graph === 'original'} onPress={() => setReplay({ ...replay, graph: 'original' })} />
+          <Chip title="Current draft" selected={replay.graph === 'draft'} onPress={() => setReplay({ ...replay, graph: 'draft' })} />
+        </View>
+        <Field label="Input JSON" value={replay.input} onChangeText={input => setReplay({ ...replay, input })} multiline />
+        {effects.length > 0 && <View style={{ backgroundColor: p.dangerBg, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+          <Label size={12} style={{ color: p.redText }}>This replay executes {effects.map(n => `${n.type} · ${n.id}`).join(', ')}. These actions reach external services again.</Label>
+        </View>}
+        <ErrorText message={replay.error} />
+        <Action title="Start replay" onPress={startReplay} />
+        <View style={{ marginTop: 9 }}><Action secondary title="Cancel" onPress={() => setReplay(null)} /></View>
+      </ScrollView>}
+    </Modal>
   </ScrollView>;
 }
 

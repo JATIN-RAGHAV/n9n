@@ -77,8 +77,14 @@ export class Api {
     const query = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : '';
     return this.request<{ runs: Run[] }>(`/runs${query}`);
   }
-  run(id: string) { return this.request<{ run: Run; steps: Step[] }>(`/runs/${encodeURIComponent(id)}`); }
+  run(id: string) {
+    return this.request<{ run: Run; steps: Step[]; graph?: Draft; children?: Run[] }>(`/runs/${encodeURIComponent(id)}`);
+  }
   cancelRun(id: string) { return this.request<{ run: Run }>(`/runs/${encodeURIComponent(id)}/cancel`, 'POST'); }
+  /** Queues a replay from a node; the override replaces that node's input. */
+  replay(id: string, body: { from_node: string; input_override?: JsonObject; graph: 'original' | 'draft' }) {
+    return this.request<{ run: Run }>(`/runs/${encodeURIComponent(id)}/replay`, 'POST', body);
+  }
   credentials() { return this.request<{ credentials: Credential[] }>('/credentials'); }
   createCredential(name: string, data: { client_id: string; client_secret: string; refresh_token: string }) {
     return this.request<{ credential: Credential }>('/credentials', 'POST', { name, kind: 'gmail_oauth', data });
