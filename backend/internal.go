@@ -163,13 +163,14 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 		return
 	case "attempts":
 		var a struct {
-			LeaseToken string `json:"lease_token"`
-			NodeID     string `json:"node_id"`
-			Attempt    int    `json:"attempt"`
-			Status     string `json:"status"`
-			HTTPStatus *int   `json:"http_status"`
-			Error      string `json:"error"`
-			DurationMs int    `json:"duration_ms"`
+			LeaseToken  string `json:"lease_token"`
+			NodeID      string `json:"node_id"`
+			StepAttempt *int   `json:"step_attempt"`
+			Attempt     int    `json:"attempt"`
+			Status      string `json:"status"`
+			HTTPStatus  *int   `json:"http_status"`
+			Error       string `json:"error"`
+			DurationMs  int    `json:"duration_ms"`
 		}
 		if e := decode(r, &a); e != nil {
 			fail(w, 400, e.Error())
@@ -179,13 +180,23 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 			fail(w, 400, "invalid attempt")
 			return
 		}
+		if a.StepAttempt != nil && (*a.StepAttempt < 1 || *a.StepAttempt > 100) {
+			fail(w, 400, "invalid step_attempt")
+			return
+		}
 		if a.HTTPStatus != nil && (*a.HTTPStatus < 100 || *a.HTTPStatus > 599) {
 			fail(w, 400, "invalid http_status")
 			return
 		}
 		a.Error = truncateUTF8(a.Error, 4096)
+		tx, e := s.db.Begin()
+		if e != nil {
+			fail(w, 500, "database error")
+			return
+		}
+		defer tx.Rollback()
 		var graphStr string
-		e := s.db.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1 AND r.status='running' AND r.lease_token=$2 AND r.lease_until>$3`, runID, a.LeaseToken, now()).Scan(&graphStr)
+		e = tx.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1 AND r.status='running' AND r.lease_token=$2 AND r.lease_until>$3 FOR UPDATE OF r`, runID, a.LeaseToken, now()).Scan(&graphStr)
 		if e != nil {
 			fail(w, 409, "lease expired")
 			return
@@ -203,7 +214,13 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 			fail(w, 400, "node not in workflow")
 			return
 		}
-		if _, e = s.db.Exec(`INSERT INTO step_attempts(run_id,node_id,attempt,status,http_status,error,duration_ms,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, runID, a.NodeID, a.Attempt, a.Status, a.HTTPStatus, a.Error, a.DurationMs, now()); e != nil {
+		// A runner that retries the report after a lost response sends the
+		// same step attempt and attempt number again; keep the first copy.
+		if _, e = tx.Exec(`INSERT INTO step_attempts(run_id,node_id,step_attempt,attempt,status,http_status,error,duration_ms,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (run_id,node_id,step_attempt,attempt) WHERE step_attempt IS NOT NULL DO NOTHING`, runID, a.NodeID, a.StepAttempt, a.Attempt, a.Status, a.HTTPStatus, a.Error, a.DurationMs, now()); e != nil {
+			fail(w, 500, "database error")
+			return
+		}
+		if e = tx.Commit(); e != nil {
 			fail(w, 500, "database error")
 			return
 		}

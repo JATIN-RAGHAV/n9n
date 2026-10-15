@@ -134,6 +134,108 @@ func TestFeatureDiscoveryAndCatalogVersion(t *testing.T) {
 	}
 }
 
+func TestMigration6ScopesAttemptsAndKeepsOldRowsReadable(t *testing.T) {
+	path, db := openAtVersion(t, 5)
+	graph := `{"nodes":[{"id":"t","type":"manual_trigger","config":{}},{"id":"call","type":"http_request","config":{"url":"https://example.com/","method":"GET"}}],"edges":[{"id":"e","source":"t","target":"call","source_port":"out"}]}`
+	for _, q := range []string{
+		`INSERT INTO users VALUES('u1','u1@example.com','h','2025-01-01')`,
+		`INSERT INTO workflows(id,user_id,name,draft,published_version,created_at,updated_at) VALUES('w1','u1','w','` + graph + `',1,'2025-01-01','2025-01-01')`,
+		`INSERT INTO versions VALUES('w1',1,'` + graph + `')`,
+		`INSERT INTO runs(id,workflow_id,version,status,input,created_at,updated_at) VALUES('r1','w1',1,'succeeded','{}','2025-01-01','2025-01-01')`,
+		`INSERT INTO steps(run_id,node_id,status,input,output,created_at) VALUES('r1','call','succeeded','{}','{}','2025-01-01')`,
+		`INSERT INTO step_attempts(run_id,node_id,attempt,status,http_status,duration_ms,created_at) VALUES('r1','call',1,'succeeded',200,5,'2025-01-01')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := NewServer(path, testKey, testToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.db.Close()
+	attempts, err := s.stepAttempts("r1")
+	if err != nil || len(attempts["call"]) != 1 || attempts["call"][0].StepAttempt != nil {
+		t.Fatalf("legacy attempt rows: %#v %v", attempts, err)
+	}
+	// Scoped rows are unique per step attempt and attempt; unscoped rows are not.
+	for _, q := range []string{
+		`INSERT INTO step_attempts(run_id,node_id,step_attempt,attempt,status,duration_ms,created_at) VALUES('r1','call',1,1,'failed',5,'2025-01-02')`,
+		`INSERT INTO step_attempts(run_id,node_id,attempt,status,duration_ms,created_at) VALUES('r1','call',1,'failed',5,'2025-01-02')`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.Exec(`INSERT INTO step_attempts(run_id,node_id,step_attempt,attempt,status,duration_ms,created_at) VALUES('r1','call',1,1,'failed',5,'2025-01-02')`); err == nil {
+		t.Fatal("duplicate scoped attempt accepted")
+	}
+}
+
+func TestAttemptsAreGroupedByStepAttemptAndDeduplicated(t *testing.T) {
+	s := testServer(t)
+	cookie := registered(t, s, "scoped-"+id()+"@example.com")
+	graph := map[string]any{"nodes": []any{
+		map[string]any{"id": "start", "type": "manual_trigger", "position": map[string]any{"x": 0, "y": 0}, "config": map[string]any{}},
+		map[string]any{"id": "call", "type": "http_request", "position": map[string]any{"x": 200, "y": 0}, "config": map[string]any{"url": "https://example.com/", "method": "GET"}},
+	}, "edges": []any{map[string]any{"id": "e1", "source": "start", "target": "call", "source_port": "out"}}}
+	status, value, _ := request(t, s, cookie, "POST", "/api/workflows", map[string]any{"name": "scoped", "draft": graph}, false)
+	requireOK(t, status, value)
+	wid := value["workflow"].(map[string]any)["id"].(string)
+	status, value, _ = request(t, s, cookie, "POST", "/api/workflows/"+wid+"/test", map[string]any{"input": map[string]any{}}, false)
+	requireOK(t, status, value)
+	rid := value["run"].(map[string]any)["id"].(string)
+	claimed, err := s.claim("scoped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := claimed.(map[string]any)["lease_token"].(string)
+	step := func(node, state string, attempt int) {
+		t.Helper()
+		status, value, _ := request(t, s, nil, "POST", "/internal/jobs/"+rid+"/steps", map[string]any{"lease_token": lease, "node_id": node, "status": state, "input": map[string]any{}, "output": map[string]any{}, "attempt": attempt}, true)
+		requireOK(t, status, value)
+	}
+	report := func(stepAttempt, attempt, code int) {
+		t.Helper()
+		status, value, _ := request(t, s, nil, "POST", "/internal/jobs/"+rid+"/attempts", map[string]any{"lease_token": lease, "node_id": "call", "step_attempt": stepAttempt, "attempt": attempt, "status": "failed", "http_status": code, "error": "", "duration_ms": 1}, true)
+		requireOK(t, status, value)
+	}
+	// First execution of the node: three failing requests, then the step fails.
+	step("start", "succeeded", 1)
+	step("call", "running", 1)
+	report(1, 1, 500)
+	report(1, 2, 500)
+	report(1, 3, 503)
+	report(1, 3, 503) // a retried report is ignored
+	step("call", "failed", 1)
+	// Second execution after a resume: one request, then success.
+	step("call", "running", 2)
+	report(2, 1, 502)
+	step("call", "succeeded", 2)
+	if status, _, _ = request(t, s, nil, "POST", "/internal/jobs/"+rid+"/attempts", map[string]any{"lease_token": lease, "node_id": "call", "step_attempt": 0, "attempt": 1, "status": "failed", "error": "", "duration_ms": 1}, true); status != 400 {
+		t.Fatalf("invalid step_attempt accepted: %d", status)
+	}
+	status, value, _ = request(t, s, cookie, "GET", "/api/runs/"+rid, nil, false)
+	requireOK(t, status, value)
+	steps := value["steps"].([]any)
+	if len(steps) != 5 {
+		t.Fatalf("steps: %d", len(steps))
+	}
+	first := steps[2].(map[string]any)
+	second := steps[4].(map[string]any)
+	if first["status"] != "failed" || len(first["attempts"].([]any)) != 3 {
+		t.Fatalf("first execution: %#v", first)
+	}
+	if second["status"] != "succeeded" || len(second["attempts"].([]any)) != 1 || second["attempts"].([]any)[0].(map[string]any)["step_attempt"] != float64(2) {
+		t.Fatalf("second execution: %#v", second)
+	}
+	for _, i := range []int{1, 3} {
+		if _, present := steps[i].(map[string]any)["attempts"]; present {
+			t.Fatalf("running step carries attempts: %#v", steps[i])
+		}
+	}
+}
+
 func TestRunDetailReturnsTheExecutedGraph(t *testing.T) {
 	s := testServer(t)
 	cookie := registered(t, s, "graph-"+id()+"@example.com")

@@ -374,6 +374,7 @@ async fn retried_get_records_every_attempt() {
     for (i, attempt) in attempts.iter().enumerate() {
         assert_eq!(attempt["lease_token"], "lease1");
         assert_eq!(attempt["node_id"], "call");
+        assert_eq!(attempt["step_attempt"], 1);
         assert_eq!(attempt["attempt"], i as u64 + 1);
         assert_eq!(attempt["status"], "failed");
         assert_eq!(attempt["http_status"], 500);

@@ -44,9 +44,10 @@ func (s *Server) ownedRun(id, uid string) (Run, error) {
 	_ = json.Unmarshal([]byte(input), &x.Input)
 	return x, e
 }
+
 // stepAttempts returns a run's recorded HTTP attempts grouped by node.
 func (s *Server) stepAttempts(runID string) (map[string][]StepAttempt, error) {
-	rows, e := s.db.Query(`SELECT node_id,attempt,status,http_status,error,duration_ms,created_at FROM step_attempts WHERE run_id=$1 ORDER BY id`, runID)
+	rows, e := s.db.Query(`SELECT node_id,step_attempt,attempt,status,http_status,error,duration_ms,created_at FROM step_attempts WHERE run_id=$1 ORDER BY id`, runID)
 	if e != nil {
 		return nil, e
 	}
@@ -55,8 +56,12 @@ func (s *Server) stepAttempts(runID string) (map[string][]StepAttempt, error) {
 	for rows.Next() {
 		var nodeID string
 		var a StepAttempt
-		var status sql.NullInt64
-		if rows.Scan(&nodeID, &a.Attempt, &a.Status, &status, &a.Error, &a.DurationMs, &a.CreatedAt) == nil {
+		var scope, status sql.NullInt64
+		if rows.Scan(&nodeID, &scope, &a.Attempt, &a.Status, &status, &a.Error, &a.DurationMs, &a.CreatedAt) == nil {
+			if scope.Valid {
+				n := int(scope.Int64)
+				a.StepAttempt = &n
+			}
 			if status.Valid {
 				code := int(status.Int64)
 				a.HTTPStatus = &code
@@ -66,6 +71,35 @@ func (s *Server) stepAttempts(runID string) (map[string][]StepAttempt, error) {
 	}
 	return out, rows.Err()
 }
+
+// attachAttempts hangs each attempt off the step row it belongs to: the
+// node's latest row for the execution attempt it names, or the node's latest
+// row when an older runner did not say.
+func attachAttempts(steps []Step, attempts map[string][]StepAttempt) {
+	latest := map[string]int{}
+	latestFor := map[string]map[int]int{}
+	for i, t := range steps {
+		latest[t.NodeID] = i
+		if latestFor[t.NodeID] == nil {
+			latestFor[t.NodeID] = map[int]int{}
+		}
+		latestFor[t.NodeID][t.Attempt] = i
+	}
+	for nodeID, list := range attempts {
+		for _, a := range list {
+			i, ok := latest[nodeID]
+			if a.StepAttempt != nil {
+				if j, scoped := latestFor[nodeID][*a.StepAttempt]; scoped {
+					i = j
+				}
+			}
+			if ok {
+				steps[i].Attempts = append(steps[i].Attempts, a)
+			}
+		}
+	}
+}
+
 // childRuns lists the replay and shadow runs that came from a run.
 func (s *Server) childRuns(runID, uid string) ([]Run, error) {
 	rows, e := s.db.Query(`SELECT id FROM runs WHERE parent_run_id=$1 ORDER BY created_at`, runID)
@@ -158,16 +192,7 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []st
 			fail(w, 500, "database error")
 			return
 		}
-		// Attempts belong to a node, so they hang off its latest step row.
-		latest := map[string]int{}
-		for i, t := range steps {
-			latest[t.NodeID] = i
-		}
-		for nodeID, list := range attempts {
-			if i, ok := latest[nodeID]; ok {
-				steps[i].Attempts = list
-			}
-		}
+		attachAttempts(steps, attempts)
 		var graphText string
 		e = s.db.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1`, x.ID).Scan(&graphText)
 		if e != nil {

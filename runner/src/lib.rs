@@ -168,11 +168,18 @@ impl Api {
             .await
             .map(|_| ())
     }
-    /// Reports one HTTP request a node made, so retries are visible in the run.
-    pub async fn attempt(&self, job: &Job, node: &str, attempt: &HttpAttempt) -> Result<()> {
+    /// Reports one HTTP request a node made during its `step_attempt`-th
+    /// execution, so retries are visible in the run.
+    pub async fn attempt(
+        &self,
+        job: &Job,
+        node: &str,
+        step_attempt: u32,
+        attempt: &HttpAttempt,
+    ) -> Result<()> {
         self.post(
             &format!("/internal/jobs/{}/attempts", job.id),
-            json!({"lease_token":job.lease_token,"node_id":node,"attempt":attempt.attempt,"status":attempt.status,"http_status":attempt.http_status,"error":attempt.error,"duration_ms":attempt.duration_ms}),
+            json!({"lease_token":job.lease_token,"node_id":node,"step_attempt":step_attempt,"attempt":attempt.attempt,"status":attempt.status,"http_status":attempt.http_status,"error":attempt.error,"duration_ms":attempt.duration_ms}),
         )
         .await
         .map(|_| ())
@@ -790,7 +797,7 @@ async fn execute_inner(
                 Some(&timing),
             )
             .await?;
-            let action = run_node(api, job, node, &input, &outputs, allow_private)
+            let action = run_node(api, job, node, &input, &outputs, allow_private, attempt)
                 .await
                 .and_then(|(o, b)| {
                     let output_len = serde_json::to_vec(&o)
@@ -878,6 +885,7 @@ async fn run_node(
     input: &Value,
     outputs: &HashMap<String, Value>,
     allow_private: bool,
+    attempt: u32,
 ) -> Result<(Value, String)> {
     match node.kind.as_str() {
         "manual_trigger" | "webhook_trigger" | "schedule_trigger" | "email_trigger" => {
@@ -900,8 +908,8 @@ async fn run_node(
                 http_node_with_attempts(&node.config, input, outputs, allow_private).await;
             // Attempt reports are observability only: an older backend without
             // the endpoint, or a lost lease, must not change the node's result.
-            for attempt in &attempts {
-                if let Err(error) = api.attempt(job, &node.id, attempt).await {
+            for request in &attempts {
+                if let Err(error) = api.attempt(job, &node.id, attempt, request).await {
                     eprintln!("job {}: attempt report for {}: {error}", job.id, node.id);
                 }
             }

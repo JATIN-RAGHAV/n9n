@@ -96,12 +96,13 @@ type Step struct {
 
 // StepAttempt is one HTTP request made by a node, including internal retries.
 type StepAttempt struct {
-	Attempt    int    `json:"attempt"`
-	Status     string `json:"status"`
-	HTTPStatus *int   `json:"http_status,omitempty"`
-	Error      string `json:"error,omitempty"`
-	DurationMs int    `json:"duration_ms"`
-	CreatedAt  string `json:"created_at"`
+	StepAttempt *int   `json:"step_attempt,omitempty"`
+	Attempt     int    `json:"attempt"`
+	Status      string `json:"status"`
+	HTTPStatus  *int   `json:"http_status,omitempty"`
+	Error       string `json:"error,omitempty"`
+	DurationMs  int    `json:"duration_ms"`
+	CreatedAt   string `json:"created_at"`
 }
 
 var nodeTypes = map[string]bool{"manual_trigger": true, "webhook_trigger": true, "schedule_trigger": true, "email_trigger": true, "set_fields": true, "http_request": true, "condition": true, "send_email": true}
@@ -303,8 +304,16 @@ var migration5 = []string{
 	`CREATE INDEX IF NOT EXISTS step_attempts_run ON step_attempts(run_id,node_id)`,
 }
 
+// Attempts are scoped to the execution attempt of their step, so a resumed
+// node keeps the requests of each execution apart; the partial unique index
+// lets a repeated report be ignored.
+var migration6 = []string{
+	`ALTER TABLE step_attempts ADD COLUMN IF NOT EXISTS step_attempt INTEGER`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS step_attempts_scoped ON step_attempts(run_id,node_id,step_attempt,attempt) WHERE step_attempt IS NOT NULL`,
+}
+
 // migrations[i] upgrades the schema from version i to i+1.
-var migrations = [][]string{schema, migration2, migration3, migration4, migration5}
+var migrations = [][]string{schema, migration2, migration3, migration4, migration5, migration6}
 
 func id() string { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
 
