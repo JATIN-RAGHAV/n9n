@@ -133,6 +133,36 @@ func TestFeatureDiscoveryAndCatalogVersion(t *testing.T) {
 	}
 }
 
+func TestRunDetailReturnsTheExecutedGraph(t *testing.T) {
+	s := testServer(t)
+	cookie := registered(t, s, "graph-"+id()+"@example.com")
+	graph := map[string]any{"nodes": []any{
+		map[string]any{"id": "start", "type": "manual_trigger", "position": map[string]any{"x": 10, "y": 20}, "config": map[string]any{}},
+		map[string]any{"id": "set", "type": "set_fields", "position": map[string]any{"x": 300, "y": 20}, "config": map[string]any{"fields": map[string]any{"a": 1}}},
+	}, "edges": []any{map[string]any{"id": "e1", "source": "start", "target": "set", "source_port": "out"}}}
+	status, value, _ := request(t, s, cookie, "POST", "/api/workflows", map[string]any{"name": "graph", "draft": graph}, false)
+	requireOK(t, status, value)
+	wid := value["workflow"].(map[string]any)["id"].(string)
+	status, value, _ = request(t, s, cookie, "POST", "/api/workflows/"+wid+"/test", map[string]any{"input": map[string]any{}}, false)
+	requireOK(t, status, value)
+	rid := value["run"].(map[string]any)["id"].(string)
+	// Editing the draft afterwards must not change what the run reports.
+	graph["nodes"].([]any)[1].(map[string]any)["config"] = map[string]any{"fields": map[string]any{"a": 2}}
+	status, value, _ = request(t, s, cookie, "PUT", "/api/workflows/"+wid, map[string]any{"name": "graph", "draft": graph}, false)
+	requireOK(t, status, value)
+	status, value, _ = request(t, s, cookie, "GET", "/api/runs/"+rid, nil, false)
+	requireOK(t, status, value)
+	executed := value["graph"].(map[string]any)
+	nodes := executed["nodes"].([]any)
+	if len(nodes) != 2 || len(executed["edges"].([]any)) != 1 {
+		t.Fatalf("graph: %#v", executed)
+	}
+	set := nodes[1].(map[string]any)
+	if set["id"] != "set" || set["position"].(map[string]any)["x"] != float64(300) || set["config"].(map[string]any)["fields"].(map[string]any)["a"] != float64(1) {
+		t.Fatalf("snapshot node: %#v", set)
+	}
+}
+
 func TestHTTPAttemptsAreStoredAndNestedUnderSteps(t *testing.T) {
 	s := testServer(t)
 	cookie := registered(t, s, "attempts-"+id()+"@example.com")
