@@ -187,6 +187,108 @@ async fn oversized_action_output_records_failed_step_and_stops() {
     assert_eq!(completes[0]["status"], "failed");
 }
 
+fn step_posts(events: &[(String, Value)]) -> Vec<Value> {
+    events
+        .iter()
+        .filter(|(path, _)| path.ends_with("/steps"))
+        .map(|(_, body)| body.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn resume_from_copied_steps_feeds_their_outputs_into_mappings() {
+    // A replay seeds the upstream steps of a run, possibly with an edited
+    // output; everything downstream must read those outputs, both as its
+    // direct input and through {{nodes.ID.x}} references.
+    let (api, seen) = mock_backend().await;
+    let job: Job = serde_json::from_value(json!({
+        "id":"run1","lease_token":"lease1","workflow_id":"wf1","version":1,
+        "input":{"seed":"original"},
+        "steps":[
+            {"node_id":"start","status":"succeeded","output":{"seed":"original"},"branch":"","attempt":1},
+            {"node_id":"a","status":"succeeded","output":{"seed":"original","a":"edited"},"branch":"","attempt":1}
+        ],
+        "graph":{"nodes":[
+            {"id":"start","type":"manual_trigger","config":{}},
+            {"id":"a","type":"set_fields","config":{"fields":{"a":"{{input.seed}}"}}},
+            {"id":"b","type":"set_fields","config":{"fields":{"b":"{{nodes.a.a}}-{{input.a}}"}}},
+            {"id":"c","type":"set_fields","config":{"fields":{"c":"{{nodes.a.a}}/{{nodes.b.b}}"}}}
+        ],"edges":[
+            {"id":"e1","source":"start","target":"a","source_port":"out"},
+            {"id":"e2","source":"a","target":"b","source_port":"out"},
+            {"id":"e3","source":"b","target":"c","source_port":"out"}
+        ]}
+    }))
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), execute(&api, job, false))
+        .await
+        .unwrap()
+        .unwrap();
+    let events = seen.lock().unwrap();
+    let steps = step_posts(&events);
+    let names: Vec<(&str, &str)> = steps
+        .iter()
+        .map(|s| {
+            (
+                s["node_id"].as_str().unwrap(),
+                s["status"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            ("b", "running"),
+            ("b", "succeeded"),
+            ("c", "running"),
+            ("c", "succeeded")
+        ]
+    );
+    let b = &steps[1];
+    assert_eq!(b["input"], json!({"seed":"original","a":"edited"}));
+    assert_eq!(b["output"]["b"], "edited-edited");
+    assert_eq!(steps[3]["output"]["c"], "edited/edited-edited");
+    assert!(events
+        .iter()
+        .any(|(path, body)| path.ends_with("/complete") && body["status"] == "succeeded"));
+}
+
+#[tokio::test]
+async fn resume_follows_the_recorded_branch_of_a_copied_condition() {
+    // The seeded condition says "false" although its input now evaluates to
+    // true: the recorded branch wins, as it does for a replay whose feeder
+    // output was edited.
+    let (api, seen) = mock_backend().await;
+    let saved = json!([
+        {"node_id":"start","status":"succeeded","output":{"score":9},"branch":"","attempt":1},
+        {"node_id":"gate","status":"succeeded","output":{"score":9,"edited":true},"branch":"false","attempt":1}
+    ]);
+    tokio::time::timeout(Duration::from_secs(5), execute(&api, job(saved), false))
+        .await
+        .unwrap()
+        .unwrap();
+    let events = seen.lock().unwrap();
+    let steps = step_posts(&events);
+    let names: Vec<(&str, &str)> = steps
+        .iter()
+        .map(|s| {
+            (
+                s["node_id"].as_str().unwrap(),
+                s["status"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        names,
+        vec![("yes", "skipped"), ("no", "running"), ("no", "succeeded")]
+    );
+    assert_eq!(steps[1]["input"], json!({"score":9,"edited":true}));
+    assert_eq!(
+        steps[2]["output"],
+        json!({"score":9,"edited":true,"answer":"no"})
+    );
+}
+
 /// An HTTP target that answers every connection with the same status line.
 async fn fixed_target(status: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
