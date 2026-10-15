@@ -271,9 +271,11 @@ void main() {
   });
 
   /// Serves the failed run, records replay requests and serves the new run.
-  MockClient replayClient(Map<String, Object?> calls) =>
+  MockClient replayClient(Map<String, Object?> calls,
+          {Object? draft, int draftStatus = 200}) =>
       MockClient((request) async {
         final path = request.url.path;
+        var status = 200;
         final replayed = {
           'id': 'run-3',
           'workflow_id': 'flow-1',
@@ -297,6 +299,19 @@ void main() {
           payload = {'run': replayed};
         } else if (path == '/api/runs/run-2') {
           payload = failedRunDetail;
+        } else if (path == '/api/workflows/flow-1' && draft != null) {
+          calls['draft'] = (calls['draft'] as int? ?? 0) + 1;
+          status = draftStatus;
+          payload = status == 200
+              ? {
+                  'workflow': {
+                    'id': 'flow-1',
+                    'name': 'Flow',
+                    'draft': draft,
+                    'active': false
+                  }
+                }
+              : {'error': 'database error'};
         } else if (path == '/api/runs/run-3') {
           payload = {
             'run': replayed,
@@ -308,9 +323,99 @@ void main() {
         } else {
           payload = {'runs': [], 'workflows': []};
         }
-        return http.Response(jsonEncode(payload), 200,
+        return http.Response(jsonEncode(payload), status,
             headers: {'content-type': 'application/json'});
       });
+
+  // The current draft turns b into a plain transform and adds an HTTP node c.
+  final editedDraft = {
+    'nodes': [
+      {
+        'id': 'trigger',
+        'type': 'manual_trigger',
+        'position': {'x': 100, 'y': 100},
+        'config': {}
+      },
+      {
+        'id': 'a',
+        'type': 'set_fields',
+        'position': {'x': 400, 'y': 100},
+        'config': {'fields': {}}
+      },
+      {
+        'id': 'b',
+        'type': 'set_fields',
+        'position': {'x': 700, 'y': 100},
+        'config': {'fields': {}}
+      },
+      {
+        'id': 'c',
+        'type': 'http_request',
+        'position': {'x': 1000, 'y': 100},
+        'config': {'url': 'https://example.com', 'method': 'POST'}
+      },
+    ],
+    'edges': [
+      {'id': 'e1', 'source': 'trigger', 'target': 'a', 'source_port': 'out'},
+      {'id': 'e2', 'source': 'a', 'target': 'b', 'source_port': 'out'},
+      {'id': 'e3', 'source': 'b', 'target': 'c', 'source_port': 'out'},
+    ]
+  };
+
+  testWidgets('the side-effect warning follows the graph that will run',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final calls = <String, Object?>{};
+    await tester.pumpWidget(N9nApp(
+      api: Api(client: replayClient(calls, draft: editedDraft)),
+      initialUri: Uri.parse('http://localhost/#/runs/run-2'),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Replay against current draft'));
+    await tester.pumpAndSettle();
+    // Against the draft, b no longer calls out but the new node c does.
+    expect(find.textContaining('This replay executes HTTP request · c'),
+        findsOneWidget);
+    expect(find.textContaining('HTTP request · b.'), findsNothing);
+    await tester.tap(find.text('Original graph'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('This replay executes HTTP request · b'),
+        findsOneWidget);
+    await tester.tap(find.text('Current draft'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('This replay executes HTTP request · c'),
+        findsOneWidget);
+    expect(calls['draft'], 1, reason: 'the draft is fetched once');
+  });
+
+  testWidgets('an unavailable draft still warns before a replay',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final calls = <String, Object?>{};
+    await tester.pumpWidget(N9nApp(
+      api: Api(
+          client: replayClient(calls, draft: editedDraft, draftStatus: 500)),
+      initialUri: Uri.parse('http://localhost/#/runs/run-2'),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(
+        of: find.byKey(const ValueKey('moment')),
+        matching: find.text('Re-run from here')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('This replay executes HTTP request · b'),
+        findsOneWidget);
+    await tester.tap(find.text('Current draft'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('The current draft could not be loaded'),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('replay-warning')), findsOneWidget);
+  });
 
   testWidgets('re-run from here replays the step with the edited input',
       (tester) async {

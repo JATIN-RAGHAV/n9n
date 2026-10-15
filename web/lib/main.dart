@@ -1056,14 +1056,44 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
     final original = step['input'] is Map ? asJson(step['input']) : <String, dynamic>{};
     final controller = TextEditingController(
         text: const JsonEncoder.withIndent('  ').convert(original));
-    final rerun = graph == null ? <WorkflowNode>[] : downstreamNodes(graph!, nodeId);
-    final effects = rerun.where((n) => sideEffectTypes.contains(n.type)).toList();
+    // The side-effect warning follows the graph that will run: the parent's
+    // snapshot, or the current draft once it has been fetched.
+    final workflowId = '${asJson(detail?['run'])['workflow_id']}';
+    WorkflowDraft? draftGraph;
+    var draftFailed = false, draftLoading = false, dialogOpen = true;
+    Future<void> loadDraft(void Function(VoidCallback) refreshDialog) async {
+      if (draftGraph != null || draftLoading) return;
+      draftLoading = true;
+      try {
+        draftGraph = (await widget.api.workflow(workflowId)).draft;
+      } catch (_) {
+        draftFailed = true;
+      }
+      draftLoading = false;
+      if (dialogOpen) refreshDialog(() {});
+    }
+
+    if (draft) await loadDraft((_) {});
+    if (!mounted) return;
+    List<WorkflowNode> effectsIn(WorkflowDraft? source) => source == null
+        ? const []
+        : downstreamNodes(source, nodeId)
+            .where((n) => sideEffectTypes.contains(n.type))
+            .toList();
     var useDraft = draft;
     String? localError;
     final choice = await showDialog<String>(
         context: context,
-        builder: (context) => StatefulBuilder(
-            builder: (context, setDialog) => AlertDialog(
+        builder: (context) => StatefulBuilder(builder: (context, setDialog) {
+              final effects = effectsIn(useDraft ? draftGraph : graph);
+              final warning = useDraft && draftLoading
+                  ? 'Loading the current draft to check which actions it would run…'
+                  : useDraft && draftFailed
+                      ? 'The current draft could not be loaded, so this replay may execute HTTP or Gmail nodes again.'
+                      : effects.isEmpty
+                          ? null
+                          : 'This replay executes ${effects.map((n) => '${nodeLabel(n.type)} · ${n.id}').join(', ')}. These actions reach external services again.';
+              return AlertDialog(
                     title: Text('Re-run from ${stepTitle(step, nodeTypes)}'),
                     content: SizedBox(
                         width: 480,
@@ -1088,8 +1118,10 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                                 ChoiceChip(
                                     label: Text('Current draft'),
                                     selected: useDraft,
-                                    onSelected: (_) =>
-                                        setDialog(() => useDraft = true)),
+                                    onSelected: (_) {
+                                      setDialog(() => useDraft = true);
+                                      loadDraft(setDialog);
+                                    }),
                               ]),
                               const SizedBox(height: 14),
                               TextField(
@@ -1098,7 +1130,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                                   style: TextStyle(fontFamily: 'monospace'),
                                   decoration: const InputDecoration(
                                       labelText: 'Input JSON')),
-                              if (effects.isNotEmpty) ...[
+                              if (warning != null) ...[
                                 const SizedBox(height: 14),
                                 Container(
                                     key: const ValueKey('replay-warning'),
@@ -1107,8 +1139,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                                         color: context.palette.errorBg,
                                         borderRadius:
                                             BorderRadius.circular(10)),
-                                    child: Text(
-                                        'This replay executes ${effects.map((n) => '${nodeLabel(n.type)} · ${n.id}').join(', ')}. These actions reach external services again.',
+                                    child: Text(warning,
                                         style: TextStyle(
                                             color:
                                                 context.palette.accentText))),
@@ -1139,7 +1170,9 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                             }
                           },
                           child: Text('Start replay'))
-                    ])));
+                    ]);
+            }));
+    dialogOpen = false;
     disposeDialogController(controller);
     if (choice == null || !mounted) return;
     final edited = asJson(jsonDecode(choice));
