@@ -1,6 +1,6 @@
-# Node catalog version 1
+# Node catalog version 2
 
-`GET /api/nodes` returns `version: 1` and eight node entries. Each entry includes `config_schema`, `input_schema`, `output_schema`, and input/output ports. The published graph is a directed acyclic graph with exactly one trigger, at most one incoming edge per action, and all nodes reachable from the trigger. Only `condition` has `true` and `false` output ports; all other nodes output on `out`.
+`GET /api/nodes` returns `version: 2` and eight node entries. Version 2 marks the start of the platform v2 node additions; clients must ignore node types they cannot render rather than failing to load a workflow. Each entry includes `config_schema`, `input_schema`, `output_schema`, and input/output ports. The published graph is a directed acyclic graph with exactly one trigger, at most one incoming edge per action, and all nodes reachable from the trigger. Only `condition` has `true` and `false` output ports; all other nodes output on `out`.
 
 | Type | Configuration | Output |
 | --- | --- | --- |
@@ -15,4 +15,8 @@
 
 All actions receive the output of their single incoming edge as `input`. `{{input.field}}` reads that immediate input. `{{nodes.NODE_ID.field}}` reads a completed upstream node's output; node IDs use letters, digits, `_`, and `-`. A string made entirely of one mapping preserves the mapped JSON type. An embedded mapping converts the value to text. A missing field fails the step. Node config and run input JSON nesting is limited to 32 levels.
 
-HTTP request destinations resolve to public IP addresses by default (`ALLOW_PRIVATE_HTTP=false`). Redirects are not followed. `idempotency_key` must be a nonempty string when supplied; use a unique value for each logical event, such as `{{input.id}}`, rather than a constant shared by all runs.
+HTTP request destinations resolve to public IP addresses by default (`ALLOW_PRIVATE_HTTP=false`). Redirects are not followed. `idempotency_key` must be a nonempty string when supplied; use a unique value for each logical event, such as `{{input.id}}`, rather than a constant shared by all runs. GET, HEAD and idempotent requests are retried up to three times on a 5xx response or a transport failure; every request is recorded as a step attempt (`attempts` on the node's latest step in run detail) with its status code, error and duration.
+
+## Run kinds and step timing
+
+Runs carry a `kind`: `normal` (a published version), `test` (the saved draft), `replay` (re-run from a chosen node of an earlier run, linked through `parent_run_id` and `resume_from_node`) or `shadow` (a draft candidate paired with a live run). Only `normal` runs reference a published version; the others store a `graph_snapshot`. The `test` boolean remains as a mirror of `kind == "test"` for older clients. Each step records `started_at`, `finished_at` and `duration_ms`; runners that omit timing still work.
