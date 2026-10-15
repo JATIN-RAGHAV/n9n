@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'api.dart';
@@ -1015,6 +1016,10 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
   Timer? polling;
   bool refreshing = false;
   final nodeTypes = <String, String>{};
+  // The graph the run executed, for the read-only canvas.
+  WorkflowDraft? graph;
+  // The timeline step the user picked; null follows the run's latest step.
+  int? pickedIndex;
   @override
   void initState() {
     super.initState();
@@ -1035,6 +1040,9 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
       if (!mounted) return;
       final run = asJson(data['run']);
       final snapshotTypes = asJson(data['node_types']);
+      if (data['graph'] is Map) {
+        graph = WorkflowDraft.fromJson(asJson(data['graph']));
+      }
       if (snapshotTypes.isNotEmpty) {
         nodeTypes
           ..clear()
@@ -1045,6 +1053,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
           for (final node in workflow.draft.nodes) {
             nodeTypes[node.id] = node.type;
           }
+          graph ??= workflow.draft;
         } catch (_) {/* The recorded node IDs still identify the steps. */}
       }
       if (mounted) {
@@ -1075,6 +1084,21 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
       latestSteps['${step['node_id']}:${step['attempt'] ?? 1}'] = step;
     }
     final steps = latestSteps.values.toList();
+    // Without a pick, the scrubber rests on the failure or the newest step.
+    final failedIndex =
+        steps.indexWhere((step) => '${step['status']}' == 'failed');
+    final selectedIndex = steps.isEmpty
+        ? null
+        : (pickedIndex != null && pickedIndex! < steps.length)
+            ? pickedIndex!
+            : failedIndex >= 0
+                ? failedIndex
+                : steps.length - 1;
+    final selectedStep = selectedIndex == null ? null : steps[selectedIndex];
+    final statuses = <String, String>{};
+    for (final step in steps) {
+      statuses['${step['node_id']}'] = '${step['status']}';
+    }
     return ListView(padding: const EdgeInsets.all(32), children: [
       Align(
           alignment: Alignment.centerLeft,
@@ -1135,6 +1159,36 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
               padding: const EdgeInsets.only(top: 12),
               child: SelectableText('Error: ${run['error']}',
                   style: TextStyle(color: context.palette.accentText))),
+        if (steps.isNotEmpty) ...[
+          const SizedBox(height: 22),
+          Text('TIMELINE', style: fieldLabel),
+          const SizedBox(height: 10),
+          RunTimeline(
+              steps: steps,
+              nodeTypes: nodeTypes,
+              selected: selectedIndex!,
+              onSelect: (index) => setState(() => pickedIndex = index)),
+          if (graph != null) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+                height: 340,
+                child: RunCanvas(
+                    graph: graph!,
+                    statuses: statuses,
+                    selected: '${selectedStep!['node_id']}',
+                    onSelect: (nodeId) {
+                      final index = steps
+                          .lastIndexWhere((step) => step['node_id'] == nodeId);
+                      if (index >= 0) setState(() => pickedIndex = index);
+                    })),
+          ],
+          const SizedBox(height: 14),
+          MomentPanel(
+              key: const ValueKey('moment'),
+              step: selectedStep!,
+              index: selectedIndex,
+              nodeTypes: nodeTypes),
+        ],
         const SizedBox(height: 22),
         Text('STEP BY STEP', style: fieldLabel),
         const SizedBox(height: 12),
@@ -1192,6 +1246,251 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
         }),
       ],
     ]);
+  }
+}
+
+Color stepColor(BuildContext context, String status) => switch (status) {
+      'succeeded' => pine,
+      'failed' => coral,
+      'running' => Colors.amber,
+      _ => context.palette.muted,
+    };
+
+String stepTitle(Json step, Map<String, String> nodeTypes) {
+  final nodeId = '${step['node_id'] ?? 'Step'}';
+  final type = nodeTypes[nodeId];
+  return type == null ? nodeId : '${nodeLabel(type)} · $nodeId';
+}
+
+/// A horizontal scrubber over the run's steps; the selected step drives the
+/// canvas highlight and the moment panel.
+class RunTimeline extends StatelessWidget {
+  const RunTimeline(
+      {super.key,
+      required this.steps,
+      required this.nodeTypes,
+      required this.selected,
+      required this.onSelect});
+  final List<Json> steps;
+  final Map<String, String> nodeTypes;
+  final int selected;
+  final ValueChanged<int> onSelect;
+  @override
+  Widget build(BuildContext context) => SizedBox(
+      height: 92,
+      child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: steps.length,
+          separatorBuilder: (_, __) => SizedBox(
+              width: 28,
+              child: Center(
+                  child: Container(height: 2, color: context.palette.line))),
+          itemBuilder: (context, index) {
+            final step = steps[index];
+            final status = '${step['status'] ?? ''}';
+            final chosen = index == selected;
+            final duration = step['duration_ms'];
+            return InkWell(
+                key: ValueKey('timeline:$index'),
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => onSelect(index),
+                child: Container(
+                    width: 170,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                        color: chosen
+                            ? context.palette.panelRaised
+                            : context.palette.panel,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: chosen ? pine : context.palette.line,
+                            width: chosen ? 2 : 1)),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Row(children: [
+                            Container(
+                                width: 10,
+                                height: 10,
+                                decoration: BoxDecoration(
+                                    color: stepColor(context, status),
+                                    shape: BoxShape.circle)),
+                            const SizedBox(width: 7),
+                            Text('${index + 1}', style: fieldLabel),
+                            const Spacer(),
+                            if (duration is num)
+                              Text(formatDurationMs(duration.toInt()),
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: context.palette.muted))
+                          ]),
+                          const SizedBox(height: 6),
+                          Text(stepTitle(step, nodeTypes),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 12, fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 3),
+                          Text(status,
+                              style: TextStyle(
+                                  fontSize: 11, color: context.palette.muted))
+                        ])));
+          }));
+}
+
+/// The executed graph, read only, with each node tinted by its step status
+/// and the selected node outlined.
+class RunCanvas extends StatelessWidget {
+  const RunCanvas(
+      {super.key,
+      required this.graph,
+      required this.statuses,
+      required this.selected,
+      required this.onSelect});
+  final WorkflowDraft graph;
+  final Map<String, String> statuses;
+  final String selected;
+  final ValueChanged<String> onSelect;
+  @override
+  Widget build(BuildContext context) {
+    if (graph.nodes.isEmpty) return const SizedBox.shrink();
+    // Shift the snapshot so its top-left node sits near the origin.
+    final minX = graph.nodes.map((n) => n.x).reduce(math.min) - 24;
+    final minY = graph.nodes.map((n) => n.y).reduce(math.min) - 24;
+    final shifted = graph.copy();
+    for (final node in shifted.nodes) {
+      node.x -= minX;
+      node.y -= minY;
+    }
+    final width = shifted.nodes.map((n) => n.x).reduce(math.max) + 260;
+    final height = shifted.nodes.map((n) => n.y).reduce(math.max) + 170;
+    return ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+            decoration: BoxDecoration(
+                color: context.palette.canvas,
+                border: Border.all(color: context.palette.line),
+                borderRadius: BorderRadius.circular(14)),
+            child: InteractiveViewer(
+                constrained: false,
+                minScale: .35,
+                maxScale: 2,
+                boundaryMargin: const EdgeInsets.all(400),
+                child: SizedBox(
+                    width: width,
+                    height: height,
+                    child: Stack(children: [
+                      Positioned.fill(
+                          child: CustomPaint(
+                              painter: GraphPainter(shifted, context.palette))),
+                      for (final node in shifted.nodes)
+                        Positioned(
+                            left: node.x,
+                            top: node.y,
+                            child: _RunNodeCard(
+                                node: node,
+                                status: statuses[node.id],
+                                selected: node.id == selected,
+                                onTap: () => onSelect(node.id))),
+                    ])))));
+  }
+}
+
+class _RunNodeCard extends StatelessWidget {
+  const _RunNodeCard(
+      {required this.node,
+      required this.status,
+      required this.selected,
+      required this.onTap});
+  final WorkflowNode node;
+  final String? status;
+  final bool selected;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    final condition = node.type == 'condition';
+    final tint = status == null
+        ? context.palette.line
+        : stepColor(context, status!);
+    return GestureDetector(
+        onTap: onTap,
+        child: Container(
+            key: ValueKey('canvas:${node.id}'),
+            width: 216,
+            height: condition ? 122 : 102,
+            decoration: BoxDecoration(
+                color: context.palette.panel,
+                borderRadius: BorderRadius.circular(13),
+                border: Border.all(
+                    color: selected ? coral : tint, width: selected ? 3 : 1.5)),
+            padding: const EdgeInsets.fromLTRB(15, 14, 15, 10),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Icon(iconFor(node.type), size: 18, color: tint),
+                const SizedBox(width: 9),
+                Expanded(
+                    child: Text(nodeLabel(node.type),
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w800))),
+              ]),
+              const SizedBox(height: 8),
+              Text(node.id,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, color: context.palette.muted)),
+              const SizedBox(height: 4),
+              Text(status ?? 'not reached',
+                  style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w700, color: tint)),
+            ])));
+  }
+}
+
+/// The input a step received and the output it produced at that moment.
+class MomentPanel extends StatelessWidget {
+  const MomentPanel(
+      {super.key,
+      required this.step,
+      required this.index,
+      required this.nodeTypes});
+  final Json step;
+  final int index;
+  final Map<String, String> nodeTypes;
+  @override
+  Widget build(BuildContext context) {
+    final duration = step['duration_ms'];
+    final error = '${step['error'] ?? ''}';
+    return Card(
+        color: context.palette.panel,
+        elevation: 0,
+        child: Padding(
+            padding: const EdgeInsets.all(20),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('AT THIS MOMENT', style: fieldLabel),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                    child: Text('${index + 1}. ${stepTitle(step, nodeTypes)}',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w800))),
+                StatusPill('${step['status'] ?? ''}',
+                    active: step['status'] == 'failed'),
+                if (duration is num) ...[
+                  const SizedBox(width: 8),
+                  DurationBadge(duration.toInt())
+                ],
+              ]),
+              if (error.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                SelectableText(error,
+                    style: TextStyle(color: context.palette.accentText)),
+              ],
+              JsonBlock('INPUT', step['input']),
+              JsonBlock('OUTPUT', step['output']),
+            ])));
   }
 }
 

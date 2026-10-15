@@ -188,7 +188,7 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []st
 			fail(w, 500, "database error")
 			return
 		}
-		write(w, 200, map[string]any{"run": x, "steps": steps, "node_types": nodeTypes, "children": children})
+		write(w, 200, map[string]any{"run": x, "steps": steps, "node_types": nodeTypes, "graph": graph, "children": children})
 		return
 	}
 	if len(p) == 2 && p[1] == "replay" && r.Method == "POST" {

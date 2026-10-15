@@ -723,7 +723,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                   onTapDown: (details) =>
                                       _tapCanvas(details.localPosition),
                                   child: CustomPaint(
-                                      painter: _GraphPainter(
+                                      painter: GraphPainter(
                                           workflow!.draft, context.palette)))),
                           if (dragPoint != null && dragStart != null)
                             Positioned.fill(
@@ -1566,8 +1566,10 @@ Offset _bezier(Offset a, Offset b, double t) {
       b * (t * t * t);
 }
 
-class _GraphPainter extends CustomPainter {
-  _GraphPainter(this.draft, this.palette);
+/// Draws the dot grid and the connections between nodes; the editor and the
+/// read-only run canvas share it.
+class GraphPainter extends CustomPainter {
+  GraphPainter(this.draft, this.palette);
   final AppPalette palette;
   final WorkflowDraft draft;
   @override
@@ -1609,7 +1611,7 @@ class _GraphPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _GraphPainter oldDelegate) => true;
+  bool shouldRepaint(covariant GraphPainter oldDelegate) => true;
 }
 
 class _ConnectionPreviewPainter extends CustomPainter {

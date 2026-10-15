@@ -91,22 +91,180 @@ void main() {
     ));
     await tester.pumpAndSettle();
     expect(find.text('STEP BY STEP'), findsOneWidget);
-    expect(find.text('3 ms'), findsOneWidget);
-    expect(find.text('1.5 s'), findsOneWidget);
+    // Durations show on the timeline, the moment panel and the step card.
+    expect(find.text('3 ms'), findsWidgets);
+    expect(find.text('1.5 s'), findsWidgets);
     expect(find.text('succeeded · attempt 1 · 3 requests'), findsOneWidget);
     expect(find.text('ATTEMPTS (3)'), findsNothing);
 
-    await tester.tap(find.textContaining('HTTP request · call'));
+    final stepCard = find.descendant(
+        of: find.byType(ExpansionTile),
+        matching: find.text('HTTP request · call'));
+    await tester.ensureVisible(stepCard);
+    await tester.pumpAndSettle();
+    await tester.tap(stepCard);
     await tester.pumpAndSettle();
     expect(find.text('ATTEMPTS (3)'), findsOneWidget);
     expect(find.textContaining('HTTP 500'), findsNothing);
 
+    await tester.ensureVisible(find.text('ATTEMPTS (3)'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('ATTEMPTS (3)'));
     await tester.pumpAndSettle();
     expect(find.text('Attempt 1 · failed · HTTP 500 · 210 ms'), findsOneWidget);
     expect(find.text('HTTP 500 Internal Server Error: {}'), findsOneWidget);
     expect(find.text('Attempt 3 · succeeded · HTTP 200 · 80 ms'),
         findsOneWidget);
+  });
+
+  testWidgets('timeline scrubber selects steps and highlights canvas nodes',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final detail = {
+      'run': {
+        'id': 'run-2',
+        'workflow_id': 'flow-1',
+        'version': 1,
+        'kind': 'normal',
+        'status': 'failed',
+        'input': {'seed': 1},
+        'error': 'boom',
+        'created_at': '2026-01-02T03:04:05Z',
+        'updated_at': '2026-01-02T03:04:07Z'
+      },
+      'steps': [
+        {
+          'node_id': 'trigger',
+          'status': 'succeeded',
+          'input': {'seed': 1},
+          'output': {'seed': 1},
+          'attempt': 1,
+          'duration_ms': 1,
+          'created_at': '2026-01-02T03:04:05Z'
+        },
+        {
+          'node_id': 'a',
+          'status': 'running',
+          'input': {'seed': 1},
+          'output': null,
+          'attempt': 1,
+          'created_at': '2026-01-02T03:04:05Z'
+        },
+        {
+          'node_id': 'a',
+          'status': 'succeeded',
+          'input': {'seed': 1},
+          'output': {'stage': 'alpha-output'},
+          'attempt': 1,
+          'duration_ms': 20,
+          'created_at': '2026-01-02T03:04:06Z'
+        },
+        {
+          'node_id': 'b',
+          'status': 'failed',
+          'input': {'stage': 'alpha-output'},
+          'output': null,
+          'error': 'boom',
+          'attempt': 1,
+          'duration_ms': 5,
+          'created_at': '2026-01-02T03:04:07Z'
+        }
+      ],
+      'node_types': {
+        'trigger': 'manual_trigger',
+        'a': 'set_fields',
+        'b': 'http_request'
+      },
+      'graph': {
+        'nodes': [
+          {
+            'id': 'trigger',
+            'type': 'manual_trigger',
+            'position': {'x': 100, 'y': 100},
+            'config': {}
+          },
+          {
+            'id': 'a',
+            'type': 'set_fields',
+            'position': {'x': 400, 'y': 100},
+            'config': {'fields': {}}
+          },
+          {
+            'id': 'b',
+            'type': 'http_request',
+            'position': {'x': 700, 'y': 100},
+            'config': {'url': 'https://example.com', 'method': 'GET'}
+          },
+        ],
+        'edges': [
+          {'id': 'e1', 'source': 'trigger', 'target': 'a', 'source_port': 'out'},
+          {'id': 'e2', 'source': 'a', 'target': 'b', 'source_port': 'out'},
+        ]
+      },
+      'children': [],
+    };
+    final client = MockClient((request) async {
+      final payload = switch (request.url.path) {
+        '/api/auth/me' => {
+            'user': {'id': 'user-1', 'email': 'me@example.com'}
+          },
+        '/api/runs/run-2' => detail,
+        _ => {'runs': [], 'workflows': []},
+      };
+      return http.Response(jsonEncode(payload), 200,
+          headers: {'content-type': 'application/json'});
+    });
+    await tester.pumpWidget(N9nApp(
+      api: Api(client: client),
+      initialUri: Uri.parse('http://localhost/#/runs/run-2'),
+    ));
+    await tester.pumpAndSettle();
+
+    // One timeline entry per executed step; the failure is selected first.
+    expect(find.byKey(const ValueKey('timeline:0')), findsOneWidget);
+    expect(find.byKey(const ValueKey('timeline:2')), findsOneWidget);
+    expect(find.byKey(const ValueKey('timeline:3')), findsNothing);
+    final moment = find.byKey(const ValueKey('moment'));
+    expect(moment, findsOneWidget);
+    expect(find.descendant(of: moment, matching: find.text('AT THIS MOMENT')),
+        findsOneWidget);
+    expect(
+        find.descendant(
+            of: moment, matching: find.text('3. HTTP request · b')),
+        findsOneWidget);
+    expect(find.descendant(of: moment, matching: find.text('boom')),
+        findsOneWidget);
+    BoxDecoration canvasDecoration(String nodeId) =>
+        tester.widget<Container>(find.byKey(ValueKey('canvas:$nodeId')))
+            .decoration as BoxDecoration;
+    expect(canvasDecoration('b').border!.top.width, 3);
+    expect(canvasDecoration('a').border!.top.width, 1.5);
+    expect(find.text('not reached'), findsNothing);
+
+    // Scrubbing to an earlier step shows what it produced then.
+    await tester.tap(find.byKey(const ValueKey('timeline:1')));
+    await tester.pumpAndSettle();
+    expect(
+        find.descendant(of: moment, matching: find.text('2. Set fields · a')),
+        findsOneWidget);
+    expect(
+        find.descendant(
+            of: moment, matching: find.textContaining('alpha-output')),
+        findsOneWidget);
+    expect(canvasDecoration('a').border!.top.width, 3);
+    expect(canvasDecoration('b').border!.top.width, 1.5);
+
+    // Tapping a canvas node selects its step.
+    await tester.tap(find.byKey(const ValueKey('canvas:trigger')));
+    await tester.pumpAndSettle();
+    expect(
+        find.descendant(
+            of: moment, matching: find.text('1. Manual trigger · trigger')),
+        findsOneWidget);
+    expect(canvasDecoration('trigger').border!.top.width, 3);
   });
 
   test('durations read naturally at every scale', () {
