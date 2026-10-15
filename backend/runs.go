@@ -66,6 +66,28 @@ func (s *Server) stepAttempts(runID string) (map[string][]StepAttempt, error) {
 	}
 	return out, rows.Err()
 }
+// childRuns lists the replay and shadow runs that came from a run.
+func (s *Server) childRuns(runID, uid string) ([]Run, error) {
+	rows, e := s.db.Query(`SELECT id FROM runs WHERE parent_run_id=$1 ORDER BY created_at`, runID)
+	if e != nil {
+		return nil, e
+	}
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	out := []Run{}
+	for _, id := range ids {
+		if x, e := s.ownedRun(id, uid); e == nil {
+			out = append(out, x)
+		}
+	}
+	return out, nil
+}
 func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []string) {
 	if len(p) == 0 && r.Method == "GET" {
 		filter := r.URL.Query().Get("workflow_id")
@@ -161,7 +183,16 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []st
 		for _, node := range graph.Nodes {
 			nodeTypes[node.ID] = node.Type
 		}
-		write(w, 200, map[string]any{"run": x, "steps": steps, "node_types": nodeTypes})
+		children, e := s.childRuns(x.ID, uid)
+		if e != nil {
+			fail(w, 500, "database error")
+			return
+		}
+		write(w, 200, map[string]any{"run": x, "steps": steps, "node_types": nodeTypes, "children": children})
+		return
+	}
+	if len(p) == 2 && p[1] == "replay" && r.Method == "POST" {
+		s.replay(w, r, uid, x)
 		return
 	}
 	if len(p) == 2 && p[1] == "cancel" && r.Method == "POST" {
