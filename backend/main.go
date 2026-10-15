@@ -418,7 +418,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch parts[0] {
 	case "nodes":
 		if len(parts) == 1 && r.Method == "GET" {
-			write(w, 200, map[string]any{"version": 1, "nodes": catalog})
+			write(w, 200, map[string]any{"version": catalogVersion, "nodes": catalog})
+			return
+		}
+	case "features":
+		if len(parts) == 1 && r.Method == "GET" {
+			write(w, 200, map[string]any{"features": features()})
 			return
 		}
 	case "workflows":

@@ -3,7 +3,22 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 )
+
+// catalogVersion changes when the catalog gains node types; clients ignore
+// node types they cannot render.
+const catalogVersion = 2
+
+// features reports which optional features this deployment has enabled, so
+// clients can hide what is off. AI features need an Anthropic key and the
+// Code node must be switched on explicitly.
+func features() map[string]bool {
+	return map[string]bool{
+		"ai":        os.Getenv("ANTHROPIC_API_KEY") != "",
+		"code_node": os.Getenv("ENABLE_CODE_NODE") == "true",
+	}
+}
 
 var catalog = []map[string]any{
 	{"type": "manual_trigger", "name": "Manual Trigger", "category": "Trigger", "description": "Start a workflow manually.", "config_schema": map[string]any{"type": "object", "properties": map[string]any{}}, "input_ports": []string{}, "output_ports": []string{"out"}},

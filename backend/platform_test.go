@@ -104,6 +104,35 @@ func TestTestRunAndClaimedJobReportKind(t *testing.T) {
 	}
 }
 
+func TestFeatureDiscoveryAndCatalogVersion(t *testing.T) {
+	s := testServer(t)
+	if status, _, _ := request(t, s, nil, "GET", "/api/features", nil, false); status != 401 {
+		t.Fatalf("features without session: %d", status)
+	}
+	cookie := registered(t, s, "features-"+id()+"@example.com")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ENABLE_CODE_NODE", "")
+	status, value, _ := request(t, s, cookie, "GET", "/api/features", nil, false)
+	requireOK(t, status, value)
+	features := value["features"].(map[string]any)
+	if features["ai"] != false || features["code_node"] != false {
+		t.Fatalf("features off by default: %#v", features)
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	t.Setenv("ENABLE_CODE_NODE", "true")
+	status, value, _ = request(t, s, cookie, "GET", "/api/features", nil, false)
+	requireOK(t, status, value)
+	features = value["features"].(map[string]any)
+	if features["ai"] != true || features["code_node"] != true {
+		t.Fatalf("features on: %#v", features)
+	}
+	status, value, _ = request(t, s, cookie, "GET", "/api/nodes", nil, false)
+	requireOK(t, status, value)
+	if value["version"] != float64(2) || len(value["nodes"].([]any)) != len(catalog) {
+		t.Fatalf("catalog: version=%v nodes=%d", value["version"], len(value["nodes"].([]any)))
+	}
+}
+
 func TestHTTPAttemptsAreStoredAndNestedUnderSteps(t *testing.T) {
 	s := testServer(t)
 	cookie := registered(t, s, "attempts-"+id()+"@example.com")
