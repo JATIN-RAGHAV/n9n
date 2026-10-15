@@ -6,25 +6,69 @@ import (
 	"net/http"
 )
 
-// descendants returns every node downstream of from, which a replay re-runs.
-func descendants(g Graph, from string) map[string]bool {
-	out := map[string][]string{}
-	for _, e := range g.Edges {
-		out[e.Source] = append(out[e.Source], e.Target)
-	}
-	seen := map[string]bool{}
-	stack := []string{from}
-	for len(stack) > 0 {
-		n := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		for _, t := range out[n] {
-			if !seen[t] {
-				seen[t] = true
-				stack = append(stack, t)
-			}
+// recorded is a parent step's data a replay can reuse.
+type recorded struct{ input, output, branch string }
+
+// copiedStep is a parent step a replay reuses, with the branch its node takes.
+type copiedStep struct{ node, branch string }
+
+// replayPlan walks the graph the way the runner will, from the trigger until
+// it reaches from, and returns the nodes whose steps the replay reuses.
+// Conditions on the path to from are forced onto that path so a node the
+// parent skipped can be replayed; other conditions keep their recorded
+// branch, so sibling branches stay skipped. A reused node that never
+// succeeded in the parent cannot be copied, except the feeder of from when an
+// input override seeds its output.
+func replayPlan(g Graph, from string, succeeded map[string]recorded, seeded bool) ([]copiedStep, *httpError) {
+	nodes := map[string]Node{}
+	root := ""
+	for _, n := range g.Nodes {
+		nodes[n.ID] = n
+		if triggerTypes[n.Type] {
+			root = n.ID
 		}
 	}
-	return seen
+	if root == "" {
+		return nil, &httpError{400, "workflow has no trigger"}
+	}
+	children := map[string][]Edge{}
+	for _, e := range g.Edges {
+		children[e.Source] = append(children[e.Source], e)
+	}
+	// The port each node on the path leaves through to reach from.
+	pathPort := map[string]string{}
+	feeder, port := feederOf(g, from)
+	for n := feeder; n != ""; n, port = feederOf(g, n) {
+		pathPort[n] = port
+	}
+	plan := []copiedStep{}
+	visited := map[string]bool{}
+	stack := []string{root}
+	for len(stack) > 0 {
+		id := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if id == from || visited[id] {
+			continue
+		}
+		visited[id] = true
+		rec, done := succeeded[id]
+		if !done && !(seeded && id == feeder) {
+			return nil, &httpError{400, "node " + id + " did not complete in the parent run; replay from it or earlier"}
+		}
+		node := nodes[id]
+		branch := rec.branch
+		if forced, onPath := pathPort[id]; onPath && node.Type == "condition" {
+			branch = forced
+		}
+		plan = append(plan, copiedStep{id, branch})
+		for _, e := range children[id] {
+			if node.Type == "condition" && e.SourcePort != branch {
+				continue
+			}
+			stack = append(stack, e.Target)
+		}
+	}
+	return plan, nil
 }
 
 // feederOf returns the node whose output is the input of node, and the port
@@ -128,20 +172,8 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, uid string, pare
 	if a.InputOverride != nil && triggerTypes[fromType] {
 		input = a.InputOverride
 	}
-	run, e := queueReplayRun(tx, parent, version, graph, a.FromNode, input)
-	if e != nil {
-		fail(w, 500, "database error")
-		return
-	}
-	rerun := descendants(graph, a.FromNode)
-	rerun[a.FromNode] = true
-	present := map[string]bool{}
-	for _, n := range graph.Nodes {
-		present[n.ID] = true
-	}
-	type copied struct{ input, output, branch string }
-	latest := map[string]copied{}
-	order := []string{}
+	// The parent's last succeeded step per node is what a replay can reuse.
+	succeeded := map[string]recorded{}
 	rows, e := tx.Query(`SELECT node_id,input,output,branch FROM steps WHERE run_id=$1 AND status='succeeded' ORDER BY id`, parent.ID)
 	if e != nil {
 		fail(w, 500, "database error")
@@ -149,32 +181,38 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, uid string, pare
 	}
 	for rows.Next() {
 		var nodeID string
-		var c copied
-		if rows.Scan(&nodeID, &c.input, &c.output, &c.branch) != nil || rerun[nodeID] || !present[nodeID] {
-			continue
+		var rec recorded
+		if rows.Scan(&nodeID, &rec.input, &rec.output, &rec.branch) == nil {
+			succeeded[nodeID] = rec
 		}
-		if _, seen := latest[nodeID]; !seen {
-			order = append(order, nodeID)
-		}
-		latest[nodeID] = c
 	}
 	rows.Close()
-	if feeder, port := feederOf(graph, a.FromNode); a.InputOverride != nil && feeder != "" {
-		c, seen := latest[feeder]
-		if !seen {
-			c = copied{input: "{}"}
-			order = append(order, feeder)
-		}
-		c.output = jsonText(a.InputOverride)
-		if port == "true" || port == "false" {
-			c.branch = port
-		}
-		latest[feeder] = c
+	if e = rows.Err(); e != nil {
+		fail(w, 500, "database error")
+		return
+	}
+	feeder, _ := feederOf(graph, a.FromNode)
+	seeded := a.InputOverride != nil && feeder != ""
+	plan, herr := replayPlan(graph, a.FromNode, succeeded, seeded)
+	if herr != nil {
+		fail(w, herr.status, herr.msg)
+		return
+	}
+	run, e := queueReplayRun(tx, parent, version, graph, a.FromNode, input)
+	if e != nil {
+		fail(w, 500, "database error")
+		return
 	}
 	t := now()
-	for _, nodeID := range order {
-		c := latest[nodeID]
-		if _, e = tx.Exec(`INSERT INTO steps(run_id,node_id,status,input,output,error,branch,attempt,finished_at,created_at) VALUES($1,$2,'succeeded',$3,$4,'',$5,1,$6,$6)`, run.ID, nodeID, c.input, c.output, c.branch, t); e != nil {
+	for _, c := range plan {
+		rec := succeeded[c.node]
+		if rec.input == "" {
+			rec.input = "{}"
+		}
+		if seeded && c.node == feeder {
+			rec.output = jsonText(a.InputOverride)
+		}
+		if _, e = tx.Exec(`INSERT INTO steps(run_id,node_id,status,input,output,error,branch,attempt,finished_at,created_at) VALUES($1,$2,'succeeded',$3,$4,'',$5,1,$6,$6)`, run.ID, c.node, rec.input, rec.output, c.branch, t); e != nil {
 			fail(w, 500, "database error")
 			return
 		}
