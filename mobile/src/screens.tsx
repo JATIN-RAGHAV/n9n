@@ -215,7 +215,7 @@ export function RunDetailScreen({ api, runId, onOpenRun, onUnauthorized }: {
         ...(changed ? { input_override: edited } : {}) });
       setReplay(null);
       onOpenRun?.(result.run.id);
-    } catch (e) { setReplay({ ...replay, error: message(e) }); }
+    } catch (e) { fail(e, onUnauthorized, msg => setReplay({ ...replay, error: msg })); }
   };
   const effectGraph = replay?.graph === 'draft' ? draftGraph : graph;
   const effects = replay && effectGraph ? downstreamNodes(effectGraph, replay.step.node_id).filter(n => SIDE_EFFECT_TYPES.includes(n.type)) : [];
