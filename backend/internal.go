@@ -160,6 +160,56 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 		}
 		write(w, 200, map[string]bool{"ok": true})
 		return
+	case "attempts":
+		var a struct {
+			LeaseToken string `json:"lease_token"`
+			NodeID     string `json:"node_id"`
+			Attempt    int    `json:"attempt"`
+			Status     string `json:"status"`
+			HTTPStatus *int   `json:"http_status"`
+			Error      string `json:"error"`
+			DurationMs int    `json:"duration_ms"`
+		}
+		if e := decode(r, &a); e != nil {
+			fail(w, 400, e.Error())
+			return
+		}
+		if a.NodeID == "" || (a.Status != "succeeded" && a.Status != "failed") || a.Attempt < 1 || a.Attempt > 100 || a.DurationMs < 0 || a.DurationMs > 7*24*3600*1000 {
+			fail(w, 400, "invalid attempt")
+			return
+		}
+		if a.HTTPStatus != nil && (*a.HTTPStatus < 100 || *a.HTTPStatus > 599) {
+			fail(w, 400, "invalid http_status")
+			return
+		}
+		if len(a.Error) > 4096 {
+			a.Error = a.Error[:4096]
+		}
+		var graphStr string
+		e := s.db.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1 AND r.status='running' AND r.lease_token=$2 AND r.lease_until>$3`, runID, a.LeaseToken, now()).Scan(&graphStr)
+		if e != nil {
+			fail(w, 409, "lease expired")
+			return
+		}
+		var graph Graph
+		_ = json.Unmarshal([]byte(graphStr), &graph)
+		found := false
+		for _, n := range graph.Nodes {
+			if n.ID == a.NodeID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fail(w, 400, "node not in workflow")
+			return
+		}
+		if _, e = s.db.Exec(`INSERT INTO step_attempts(run_id,node_id,attempt,status,http_status,error,duration_ms,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, runID, a.NodeID, a.Attempt, a.Status, a.HTTPStatus, a.Error, a.DurationMs, now()); e != nil {
+			fail(w, 500, "database error")
+			return
+		}
+		write(w, 200, map[string]bool{"ok": true})
+		return
 	case "complete":
 		var a struct {
 			LeaseToken string `json:"lease_token"`

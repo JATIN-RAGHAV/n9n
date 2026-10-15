@@ -104,6 +104,78 @@ func TestTestRunAndClaimedJobReportKind(t *testing.T) {
 	}
 }
 
+func TestHTTPAttemptsAreStoredAndNestedUnderSteps(t *testing.T) {
+	s := testServer(t)
+	cookie := registered(t, s, "attempts-"+id()+"@example.com")
+	graph := map[string]any{"nodes": []any{
+		map[string]any{"id": "start", "type": "manual_trigger", "position": map[string]any{"x": 0, "y": 0}, "config": map[string]any{}},
+		map[string]any{"id": "call", "type": "http_request", "position": map[string]any{"x": 200, "y": 0}, "config": map[string]any{"url": "https://example.com/", "method": "GET"}},
+	}, "edges": []any{map[string]any{"id": "e1", "source": "start", "target": "call", "source_port": "out"}}}
+	status, value, _ := request(t, s, cookie, "POST", "/api/workflows", map[string]any{"name": "attempts", "draft": graph}, false)
+	requireOK(t, status, value)
+	wid := value["workflow"].(map[string]any)["id"].(string)
+	status, value, _ = request(t, s, cookie, "POST", "/api/workflows/"+wid+"/test", map[string]any{"input": map[string]any{}}, false)
+	requireOK(t, status, value)
+	rid := value["run"].(map[string]any)["id"].(string)
+	claimed, err := s.claim("attempts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := claimed.(map[string]any)["lease_token"].(string)
+	step := func(node, state string) {
+		t.Helper()
+		status, value, _ := request(t, s, nil, "POST", "/internal/jobs/"+rid+"/steps", map[string]any{"lease_token": lease, "node_id": node, "status": state, "input": map[string]any{}, "output": map[string]any{}, "attempt": 1}, true)
+		requireOK(t, status, value)
+	}
+	step("start", "succeeded")
+	step("call", "running")
+	for i, code := range []int{500, 503, 200} {
+		state := "failed"
+		if code == 200 {
+			state = "succeeded"
+		}
+		status, value, _ = request(t, s, nil, "POST", "/internal/jobs/"+rid+"/attempts", map[string]any{"lease_token": lease, "node_id": "call", "attempt": i + 1, "status": state, "http_status": code, "error": "", "duration_ms": 12 * (i + 1)}, true)
+		requireOK(t, status, value)
+	}
+	step("call", "succeeded")
+	for _, bad := range []map[string]any{
+		{"lease_token": lease, "node_id": "call", "attempt": 0, "status": "failed", "error": "", "duration_ms": 1},
+		{"lease_token": lease, "node_id": "call", "attempt": 1, "status": "retrying", "error": "", "duration_ms": 1},
+		{"lease_token": lease, "node_id": "call", "attempt": 1, "status": "failed", "http_status": 42, "error": "", "duration_ms": 1},
+		{"lease_token": lease, "node_id": "ghost", "attempt": 1, "status": "failed", "error": "", "duration_ms": 1},
+	} {
+		if status, _, _ = request(t, s, nil, "POST", "/internal/jobs/"+rid+"/attempts", bad, true); status != 400 {
+			t.Fatalf("invalid attempt accepted: %d %v", status, bad)
+		}
+	}
+	if status, _, _ = request(t, s, nil, "POST", "/internal/jobs/"+rid+"/attempts", map[string]any{"lease_token": "wrong", "node_id": "call", "attempt": 1, "status": "failed", "error": "", "duration_ms": 1}, true); status != 409 {
+		t.Fatalf("attempt without lease accepted: %d", status)
+	}
+	status, value, _ = request(t, s, cookie, "GET", "/api/runs/"+rid, nil, false)
+	requireOK(t, status, value)
+	steps := value["steps"].([]any)
+	if len(steps) != 3 {
+		t.Fatalf("steps: %#v", steps)
+	}
+	if _, present := steps[1].(map[string]any)["attempts"]; present {
+		t.Fatalf("running step carries attempts: %#v", steps[1])
+	}
+	attempts := steps[2].(map[string]any)["attempts"].([]any)
+	if len(attempts) != 3 {
+		t.Fatalf("attempts: %#v", attempts)
+	}
+	first, last := attempts[0].(map[string]any), attempts[2].(map[string]any)
+	if first["attempt"] != float64(1) || first["status"] != "failed" || first["http_status"] != float64(500) || first["duration_ms"] != float64(12) {
+		t.Fatalf("first attempt: %#v", first)
+	}
+	if last["attempt"] != float64(3) || last["status"] != "succeeded" || last["http_status"] != float64(200) {
+		t.Fatalf("last attempt: %#v", last)
+	}
+	if _, present := steps[0].(map[string]any)["attempts"]; present {
+		t.Fatalf("trigger step carries attempts: %#v", steps[0])
+	}
+}
+
 func TestStepTimingIsStoredAndReported(t *testing.T) {
 	s := testServer(t)
 	cookie := registered(t, s, "timing-"+id()+"@example.com")

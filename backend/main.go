@@ -80,16 +80,27 @@ type Run struct {
 	UpdatedAt      string  `json:"updated_at"`
 }
 type Step struct {
-	NodeID     string `json:"node_id"`
-	Status     string `json:"status"`
-	Input      any    `json:"input"`
-	Output     any    `json:"output"`
-	Error      string `json:"error,omitempty"`
-	Branch     string `json:"branch,omitempty"`
+	NodeID     string        `json:"node_id"`
+	Status     string        `json:"status"`
+	Input      any           `json:"input"`
+	Output     any           `json:"output"`
+	Error      string        `json:"error,omitempty"`
+	Branch     string        `json:"branch,omitempty"`
+	Attempt    int           `json:"attempt"`
+	StartedAt  string        `json:"started_at,omitempty"`
+	FinishedAt string        `json:"finished_at,omitempty"`
+	DurationMs *int          `json:"duration_ms,omitempty"`
+	Attempts   []StepAttempt `json:"attempts,omitempty"`
+	CreatedAt  string        `json:"created_at"`
+}
+
+// StepAttempt is one HTTP request made by a node, including internal retries.
+type StepAttempt struct {
 	Attempt    int    `json:"attempt"`
-	StartedAt  string `json:"started_at,omitempty"`
-	FinishedAt string `json:"finished_at,omitempty"`
-	DurationMs *int   `json:"duration_ms,omitempty"`
+	Status     string `json:"status"`
+	HTTPStatus *int   `json:"http_status,omitempty"`
+	Error      string `json:"error,omitempty"`
+	DurationMs int    `json:"duration_ms"`
 	CreatedAt  string `json:"created_at"`
 }
 

@@ -187,6 +187,79 @@ async fn oversized_action_output_records_failed_step_and_stops() {
     assert_eq!(completes[0]["status"], "failed");
 }
 
+/// An HTTP target that answers every connection with the same status line.
+async fn fixed_target(status: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let mut buffer = [0u8; 4096];
+                let _ = socket.read(&mut buffer).await;
+                let reply = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}");
+                let _ = socket.write_all(reply.as_bytes()).await;
+            });
+        }
+    });
+    format!("http://{addr}/")
+}
+
+async fn http_job_attempts(method: &str, target: String) -> (Result<(), String>, Vec<Value>) {
+    let (api, seen) = mock_backend().await;
+    let job: Job = serde_json::from_value(json!({"id":"run1","lease_token":"lease1","workflow_id":"wf1","version":1,"input":{},"steps":[],"graph":{"nodes":[{"id":"start","type":"manual_trigger","config":{}},{"id":"call","type":"http_request","config":{"url":target,"method":method}}],"edges":[{"id":"a","source":"start","target":"call","source_port":"out"}]}})).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(10), execute(&api, job, true))
+        .await
+        .unwrap();
+    let events = seen.lock().unwrap();
+    let attempts = events
+        .iter()
+        .filter(|(path, _)| path == "/internal/jobs/run1/attempts")
+        .map(|(_, body)| body.clone())
+        .collect();
+    (result, attempts)
+}
+
+#[tokio::test]
+async fn retried_get_records_every_attempt() {
+    let target = fixed_target("500 Internal Server Error").await;
+    let (result, attempts) = http_job_attempts("GET", target).await;
+    assert!(result.unwrap_err().contains("HTTP 500"));
+    assert_eq!(attempts.len(), 3);
+    for (i, attempt) in attempts.iter().enumerate() {
+        assert_eq!(attempt["lease_token"], "lease1");
+        assert_eq!(attempt["node_id"], "call");
+        assert_eq!(attempt["attempt"], i as u64 + 1);
+        assert_eq!(attempt["status"], "failed");
+        assert_eq!(attempt["http_status"], 500);
+        assert!(attempt["error"].as_str().unwrap().contains("HTTP 500"));
+        assert!(attempt["duration_ms"].is_u64());
+    }
+}
+
+#[tokio::test]
+async fn post_without_idempotency_key_records_one_attempt() {
+    let target = fixed_target("500 Internal Server Error").await;
+    let (result, attempts) = http_job_attempts("POST", target).await;
+    assert!(result.unwrap_err().starts_with("uncertain:"));
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0]["attempt"], 1);
+    assert_eq!(attempts[0]["http_status"], 500);
+}
+
+#[tokio::test]
+async fn successful_request_records_a_succeeded_attempt() {
+    let target = fixed_target("200 OK").await;
+    let (result, attempts) = http_job_attempts("GET", target).await;
+    result.unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0]["status"], "succeeded");
+    assert_eq!(attempts[0]["http_status"], 200);
+    assert_eq!(attempts[0]["error"], "");
+}
+
 #[tokio::test]
 async fn steps_report_start_time_and_duration() {
     let (api, seen) = mock_backend().await;

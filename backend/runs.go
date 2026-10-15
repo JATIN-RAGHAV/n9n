@@ -44,6 +44,28 @@ func (s *Server) ownedRun(id, uid string) (Run, error) {
 	_ = json.Unmarshal([]byte(input), &x.Input)
 	return x, e
 }
+// stepAttempts returns a run's recorded HTTP attempts grouped by node.
+func (s *Server) stepAttempts(runID string) (map[string][]StepAttempt, error) {
+	rows, e := s.db.Query(`SELECT node_id,attempt,status,http_status,error,duration_ms,created_at FROM step_attempts WHERE run_id=$1 ORDER BY id`, runID)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := map[string][]StepAttempt{}
+	for rows.Next() {
+		var nodeID string
+		var a StepAttempt
+		var status sql.NullInt64
+		if rows.Scan(&nodeID, &a.Attempt, &a.Status, &status, &a.Error, &a.DurationMs, &a.CreatedAt) == nil {
+			if status.Valid {
+				code := int(status.Int64)
+				a.HTTPStatus = &code
+			}
+			out[nodeID] = append(out[nodeID], a)
+		}
+	}
+	return out, rows.Err()
+}
 func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []string) {
 	if len(p) == 0 && r.Method == "GET" {
 		filter := r.URL.Query().Get("workflow_id")
@@ -106,6 +128,22 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, uid string, p []st
 				_ = json.Unmarshal([]byte(in), &t.Input)
 				_ = json.Unmarshal([]byte(out), &t.Output)
 				steps = append(steps, t)
+			}
+		}
+		rows.Close()
+		attempts, e := s.stepAttempts(x.ID)
+		if e != nil {
+			fail(w, 500, "database error")
+			return
+		}
+		// Attempts belong to a node, so they hang off its latest step row.
+		latest := map[string]int{}
+		for i, t := range steps {
+			latest[t.NodeID] = i
+		}
+		for nodeID, list := range attempts {
+			if i, ok := latest[nodeID]; ok {
+				steps[i].Attempts = list
 			}
 		}
 		var graphText string
