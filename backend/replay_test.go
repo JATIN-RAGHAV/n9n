@@ -168,6 +168,72 @@ func TestReplayRejectsForeignRunsBadNodesAndLiveRuns(t *testing.T) {
 	}
 }
 
+func TestReplayAgainstDraftUsesEditedConfigAndStaysUnpublished(t *testing.T) {
+	s := testServer(t)
+	cookie := registered(t, s, "replay-"+id()+"@example.com")
+	status, value, _ := request(t, s, cookie, "POST", "/api/workflows", map[string]any{"name": "chain", "draft": chainGraph()}, false)
+	requireOK(t, status, value)
+	wid := value["workflow"].(map[string]any)["id"].(string)
+	status, value, _ = request(t, s, cookie, "POST", "/api/workflows/"+wid+"/test", map[string]any{"input": map[string]any{}}, false)
+	requireOK(t, status, value)
+	parent := value["run"].(map[string]any)["id"].(string)
+	drive(t, s, "")
+	edited := chainGraph()
+	edited["nodes"].([]any)[4].(map[string]any)["config"] = map[string]any{"fields": map[string]any{"d": "edited"}}
+	status, value, _ = request(t, s, cookie, "PUT", "/api/workflows/"+wid, map[string]any{"name": "chain", "draft": edited}, false)
+	requireOK(t, status, value)
+
+	status, value, _ = request(t, s, cookie, "POST", "/api/runs/"+parent+"/replay", map[string]any{"from_node": "c", "graph": "draft"}, false)
+	requireOK(t, status, value)
+	run := value["run"].(map[string]any)
+	if run["kind"] != "replay" || run["version"] != float64(0) || run["parent_run_id"] != parent {
+		t.Fatalf("draft replay: %#v", run)
+	}
+	job := drive(t, s, "")
+	var d Node
+	for _, n := range job["graph"].(Graph).Nodes {
+		if n.ID == "d" {
+			d = n
+		}
+	}
+	if d.Config["fields"].(map[string]any)["d"] != "edited" {
+		t.Fatalf("draft replay graph: %#v", d)
+	}
+	if reused := jobNodes(job); len(reused) != 3 || reused["b"].Status != "succeeded" {
+		t.Fatalf("reused steps: %#v", reused)
+	}
+	status, value, _ = request(t, s, cookie, "GET", "/api/workflows/"+wid, nil, false)
+	requireOK(t, status, value)
+	if value["workflow"].(map[string]any)["published_version"] != nil {
+		t.Fatalf("draft replay published the workflow: %#v", value["workflow"])
+	}
+	// The original snapshot is untouched by draft edits.
+	status, value, _ = request(t, s, cookie, "POST", "/api/runs/"+parent+"/replay", map[string]any{"from_node": "c", "graph": "original"}, false)
+	requireOK(t, status, value)
+	job = drive(t, s, "")
+	for _, n := range job["graph"].(Graph).Nodes {
+		if n.ID == "d" && n.Config["fields"].(map[string]any)["d"] != "d" {
+			t.Fatalf("original replay graph: %#v", n)
+		}
+	}
+	// A draft that fails publish validation, or no longer has from_node, is rejected.
+	broken := map[string]any{"nodes": []any{
+		map[string]any{"id": "trigger", "type": "manual_trigger", "position": map[string]any{"x": 0, "y": 0}, "config": map[string]any{}},
+		map[string]any{"id": "c", "type": "set_fields", "position": map[string]any{"x": 0, "y": 0}, "config": map[string]any{"fields": map[string]any{}}},
+	}, "edges": []any{}}
+	status, value, _ = request(t, s, cookie, "PUT", "/api/workflows/"+wid, map[string]any{"name": "chain", "draft": broken}, false)
+	requireOK(t, status, value)
+	if status, value, _ = request(t, s, cookie, "POST", "/api/runs/"+parent+"/replay", map[string]any{"from_node": "c", "graph": "draft"}, false); status != 400 {
+		t.Fatalf("invalid draft accepted: %d %v", status, value)
+	}
+	broken["edges"] = []any{map[string]any{"id": "e", "source": "trigger", "target": "c", "source_port": "out"}}
+	status, value, _ = request(t, s, cookie, "PUT", "/api/workflows/"+wid, map[string]any{"name": "chain", "draft": broken}, false)
+	requireOK(t, status, value)
+	if status, value, _ = request(t, s, cookie, "POST", "/api/runs/"+parent+"/replay", map[string]any{"from_node": "d", "graph": "draft"}, false); status != 400 {
+		t.Fatalf("missing from_node accepted: %d %v", status, value)
+	}
+}
+
 func TestReplayOfFailedRunSucceedsAfterInputFix(t *testing.T) {
 	s := testServer(t)
 	cookie := registered(t, s, "replay-"+id()+"@example.com")

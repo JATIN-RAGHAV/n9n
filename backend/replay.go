@@ -65,8 +65,8 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, uid string, pare
 	if a.Graph == "" {
 		a.Graph = "original"
 	}
-	if a.Graph != "original" {
-		fail(w, 400, "graph must be original")
+	if a.Graph != "original" && a.Graph != "draft" {
+		fail(w, 400, "graph must be original or draft")
 		return
 	}
 	if a.FromNode == "" {
@@ -90,7 +90,20 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, uid string, pare
 	}
 	defer tx.Rollback()
 	var graphText string
-	if e = tx.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1`, parent.ID).Scan(&graphText); e != nil {
+	version := parent.Version
+	if a.Graph == "draft" {
+		// Replay against the current draft: validated like Test draft and
+		// snapshotted, so the workflow stays unpublished.
+		var published sql.NullInt64
+		if e = tx.QueryRow(`SELECT draft,published_version FROM workflows WHERE id=$1 AND user_id=$2 FOR SHARE`, parent.WorkflowID, uid).Scan(&graphText, &published); e != nil {
+			fail(w, 404, "workflow not found")
+			return
+		}
+		version = 0
+		if published.Valid {
+			version = int(published.Int64)
+		}
+	} else if e = tx.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1`, parent.ID).Scan(&graphText); e != nil {
 		fail(w, 500, "workflow snapshot unavailable")
 		return
 	}
@@ -99,7 +112,12 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, uid string, pare
 		fail(w, 500, "invalid workflow snapshot")
 		return
 	}
-	version := parent.Version
+	if a.Graph == "draft" {
+		if e = validatePublish(graph); e != nil {
+			fail(w, 400, e.Error())
+			return
+		}
+	}
 	fromType := ""
 	for _, n := range graph.Nodes {
 		if n.ID == a.FromNode {
