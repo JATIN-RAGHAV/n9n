@@ -89,32 +89,24 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, uid string, pare
 		return
 	}
 	defer tx.Rollback()
-	var graphText string
+	var graph Graph
 	version := parent.Version
 	if a.Graph == "draft" {
 		// Replay against the current draft: validated like Test draft and
 		// snapshotted, so the workflow stays unpublished.
-		var published sql.NullInt64
-		if e = tx.QueryRow(`SELECT draft,published_version FROM workflows WHERE id=$1 AND user_id=$2 FOR SHARE`, parent.WorkflowID, uid).Scan(&graphText, &published); e != nil {
-			fail(w, 404, "workflow not found")
+		var herr *httpError
+		if graph, version, herr = validatedDraft(tx, parent.WorkflowID, uid); herr != nil {
+			fail(w, herr.status, herr.msg)
 			return
 		}
-		version = 0
-		if published.Valid {
-			version = int(published.Int64)
+	} else {
+		var graphText string
+		if e = tx.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1`, parent.ID).Scan(&graphText); e != nil {
+			fail(w, 500, "workflow snapshot unavailable")
+			return
 		}
-	} else if e = tx.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1`, parent.ID).Scan(&graphText); e != nil {
-		fail(w, 500, "workflow snapshot unavailable")
-		return
-	}
-	var graph Graph
-	if e = json.Unmarshal([]byte(graphText), &graph); e != nil {
-		fail(w, 500, "invalid workflow snapshot")
-		return
-	}
-	if a.Graph == "draft" {
-		if e = validatePublish(graph); e != nil {
-			fail(w, 400, e.Error())
+		if e = json.Unmarshal([]byte(graphText), &graph); e != nil {
+			fail(w, 500, "invalid workflow snapshot")
 			return
 		}
 	}
@@ -128,15 +120,9 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request, uid string, pare
 		fail(w, 400, "from_node is not in the workflow")
 		return
 	}
-	for _, n := range graph.Nodes {
-		if n.CredentialID == "" {
-			continue
-		}
-		var count int
-		if e = tx.QueryRow(`SELECT count(*) FROM credentials WHERE id=$1 AND user_id=$2`, n.CredentialID, uid).Scan(&count); e != nil || count == 0 {
-			fail(w, 400, "credential not found: "+n.CredentialID)
-			return
-		}
+	if herr := checkCredentials(tx, graph, uid); herr != nil {
+		fail(w, herr.status, herr.msg)
+		return
 	}
 	input := parent.Input
 	if a.InputOverride != nil && triggerTypes[fromType] {
