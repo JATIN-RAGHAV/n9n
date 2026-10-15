@@ -157,6 +157,7 @@ With the stack running:
 python3 tests/e2e_smoke.py         # end-to-end API smoke test
 python3 tests/restart_smoke.py     # a queued run survives a backend restart
 python3 tests/mobile_api_smoke.py  # mobile bearer-session flow
+python3 tests/replay_smoke.py      # time-travel replay from a middle node
 ```
 
 Browser tests (Playwright):
