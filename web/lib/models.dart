@@ -115,6 +115,28 @@ class Workflow {
       );
 }
 
+/// The node [from] and everything downstream of it, in graph order: the nodes
+/// a replay from [from] executes again.
+List<WorkflowNode> downstreamNodes(WorkflowDraft draft, String from) {
+  final byId = {for (final node in draft.nodes) node.id: node};
+  final seen = <String>{};
+  final order = <WorkflowNode>[];
+  void visit(String id) {
+    final node = byId[id];
+    if (node == null || !seen.add(id)) return;
+    order.add(node);
+    for (final edge in draft.edges.where((e) => e.source == id)) {
+      visit(edge.target);
+    }
+  }
+
+  visit(from);
+  return order;
+}
+
+/// Node types whose execution reaches external services.
+const sideEffectTypes = {'http_request', 'send_email'};
+
 const triggerTypes = {
   'manual_trigger',
   'webhook_trigger',

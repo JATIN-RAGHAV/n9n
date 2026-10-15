@@ -492,7 +492,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           key: ValueKey(route),
           api: widget.api,
           runId: route.split('/').last,
-          onBack: () => go('/workflows'));
+          onBack: () => go('/workflows'),
+          onOpenRun: (id) => go('/runs/$id'));
     } else {
       page =
           WorkflowHome(api: widget.api, onOpen: (id) => go('/workflows/$id'));
@@ -1002,10 +1003,13 @@ class RunDetailScreen extends StatefulWidget {
       {super.key,
       required this.api,
       required this.runId,
-      required this.onBack});
+      required this.onBack,
+      this.onOpenRun});
   final Api api;
   final String runId;
   final VoidCallback onBack;
+  // Opens another run, such as a replay just started or this run's parent.
+  final ValueChanged<String>? onOpenRun;
   @override
   State<RunDetailScreen> createState() => _RunDetailScreenState();
 }
@@ -1030,6 +1034,125 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
   void dispose() {
     polling?.cancel();
     super.dispose();
+  }
+
+  void openRun(String id) {
+    if (widget.onOpenRun != null) {
+      widget.onOpenRun!(id);
+      return;
+    }
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => RunDetailScreen(
+            api: widget.api,
+            runId: id,
+            onBack: () => Navigator.pop(context))));
+  }
+
+  /// Opens the replay editor for [step]: the input it received can be
+  /// changed, side-effect nodes that would run again are listed, and the new
+  /// run opens once queued.
+  Future<void> replayFrom(Json step, {bool draft = false}) async {
+    final nodeId = '${step['node_id']}';
+    final original = step['input'] is Map ? asJson(step['input']) : <String, dynamic>{};
+    final controller = TextEditingController(
+        text: const JsonEncoder.withIndent('  ').convert(original));
+    final rerun = graph == null ? <WorkflowNode>[] : downstreamNodes(graph!, nodeId);
+    final effects = rerun.where((n) => sideEffectTypes.contains(n.type)).toList();
+    var useDraft = draft;
+    String? localError;
+    final choice = await showDialog<String>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+            builder: (context, setDialog) => AlertDialog(
+                    title: Text('Re-run from ${stepTitle(step, nodeTypes)}'),
+                    content: SizedBox(
+                        width: 480,
+                        child: SingleChildScrollView(
+                            child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                              Text(
+                                  'Steps before this one keep their recorded outputs. Edit the input this step receives, then start the replay.',
+                                  style:
+                                      TextStyle(color: context.palette.muted)),
+                              const SizedBox(height: 14),
+                              Text('GRAPH', style: fieldLabel),
+                              const SizedBox(height: 6),
+                              Wrap(spacing: 8, children: [
+                                ChoiceChip(
+                                    label: Text('Original graph'),
+                                    selected: !useDraft,
+                                    onSelected: (_) =>
+                                        setDialog(() => useDraft = false)),
+                                ChoiceChip(
+                                    label: Text('Current draft'),
+                                    selected: useDraft,
+                                    onSelected: (_) =>
+                                        setDialog(() => useDraft = true)),
+                              ]),
+                              const SizedBox(height: 14),
+                              TextField(
+                                  controller: controller,
+                                  maxLines: 8,
+                                  style: TextStyle(fontFamily: 'monospace'),
+                                  decoration: const InputDecoration(
+                                      labelText: 'Input JSON')),
+                              if (effects.isNotEmpty) ...[
+                                const SizedBox(height: 14),
+                                Container(
+                                    key: const ValueKey('replay-warning'),
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                        color: context.palette.errorBg,
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                    child: Text(
+                                        'This replay executes ${effects.map((n) => '${nodeLabel(n.type)} · ${n.id}').join(', ')}. These actions reach external services again.',
+                                        style: TextStyle(
+                                            color:
+                                                context.palette.accentText))),
+                              ],
+                              if (localError != null) ...[
+                                const SizedBox(height: 10),
+                                Text(localError!,
+                                    style: TextStyle(
+                                        color: context.palette.accentText))
+                              ],
+                            ]))),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: Text('Cancel')),
+                      FilledButton(
+                          onPressed: () {
+                            try {
+                              final value = jsonDecode(controller.text);
+                              if (value is! Map) {
+                                throw const FormatException(
+                                    'Enter a JSON object.');
+                              }
+                              Navigator.pop(context, controller.text);
+                            } catch (_) {
+                              setDialog(() =>
+                                  localError = 'Enter a valid JSON object.');
+                            }
+                          },
+                          child: Text('Start replay'))
+                    ])));
+    disposeDialogController(controller);
+    if (choice == null || !mounted) return;
+    final edited = asJson(jsonDecode(choice));
+    final changed = jsonEncode(edited) != jsonEncode(original);
+    try {
+      final run = await widget.api.replay(widget.runId,
+          fromNode: nodeId,
+          inputOverride: changed ? edited : null,
+          graph: useDraft ? 'draft' : 'original');
+      if (mounted) openRun('${run['id']}');
+    } catch (e) {
+      if (mounted) showError(context, '$e');
+    }
   }
 
   Future<void> refresh() async {
@@ -1099,6 +1222,10 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
     for (final step in steps) {
       statuses['${step['node_id']}'] = '${step['status']}';
     }
+    final finished = const {'succeeded', 'failed', 'cancelled', 'uncertain'}
+        .contains('${run['status']}');
+    final canReplay = finished && steps.isNotEmpty;
+    final children = asJsonList(detail?['children']);
     return ListView(padding: const EdgeInsets.all(32), children: [
       Align(
           alignment: Alignment.centerLeft,
@@ -1135,7 +1262,15 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                       }
                     },
                     icon: Icon(Icons.stop_circle_outlined),
-                    label: Text('Cancel run'))
+                    label: Text('Cancel run')),
+              if (canReplay &&
+                  (run['status'] == 'failed' || run['status'] == 'uncertain'))
+                FilledButton.icon(
+                    onPressed: () => replayFrom(
+                        failedIndex >= 0 ? steps[failedIndex] : steps.last,
+                        draft: true),
+                    icon: Icon(Icons.history),
+                    label: Text('Replay against current draft')),
             ])
           ]),
       const SizedBox(height: 24),
@@ -1150,10 +1285,37 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                 padding: const EdgeInsets.all(22),
                 child: Wrap(spacing: 28, runSpacing: 15, children: [
                   InfoDatum('STATUS', '${run['status'] ?? ''}'),
-                  InfoDatum('MODE', run['test'] == true ? 'DRAFT TEST' : 'PUBLISHED RUN'),
+                  InfoDatum(
+                      'MODE',
+                      run['kind'] == 'replay'
+                          ? 'REPLAY FROM ${run['resume_from_node'] ?? ''}'
+                          : run['kind'] == 'shadow'
+                              ? 'SHADOW RUN'
+                              : run['test'] == true
+                                  ? 'DRAFT TEST'
+                                  : 'PUBLISHED RUN'),
                   InfoDatum('CREATED', '${run['created_at'] ?? ''}'),
-                  InfoDatum('UPDATED', '${run['updated_at'] ?? ''}')
+                  InfoDatum('UPDATED', '${run['updated_at'] ?? ''}'),
+                  if (run['parent_run_id'] != null)
+                    TextButton.icon(
+                        onPressed: () => openRun('${run['parent_run_id']}'),
+                        icon: Icon(Icons.north_west, size: 16),
+                        label: Text(
+                            'Replay of ${shortRunId('${run['parent_run_id']}')}')),
                 ]))),
+        if (children.isNotEmpty)
+          Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Wrap(spacing: 8, runSpacing: 8, children: [
+                Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Text('REPLAYS', style: fieldLabel)),
+                ...children.map((child) => ActionChip(
+                    avatar: Icon(Icons.replay, size: 16),
+                    label: Text(
+                        '${shortRunId('${child['id']}')} · ${child['status']}'),
+                    onPressed: () => openRun('${child['id']}'))),
+              ])),
         if ('${run['error'] ?? ''}'.isNotEmpty)
           Padding(
               padding: const EdgeInsets.only(top: 12),
@@ -1187,7 +1349,8 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
               key: const ValueKey('moment'),
               step: selectedStep!,
               index: selectedIndex,
-              nodeTypes: nodeTypes),
+              nodeTypes: nodeTypes,
+              onReplay: canReplay ? () => replayFrom(selectedStep) : null),
         ],
         const SizedBox(height: 22),
         Text('STEP BY STEP', style: fieldLabel),
@@ -1241,6 +1404,13 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                               JsonBlock('OUTPUT',
                                   step['output'] ?? step['output_json']),
                               if (attempts.isNotEmpty) AttemptList(attempts),
+                              if (canReplay)
+                                Padding(
+                                    padding: const EdgeInsets.only(top: 14),
+                                    child: OutlinedButton.icon(
+                                        onPressed: () => replayFrom(step),
+                                        icon: Icon(Icons.replay, size: 16),
+                                        label: Text('Re-run from here'))),
                             ]))
                   ]));
         }),
@@ -1454,10 +1624,12 @@ class MomentPanel extends StatelessWidget {
       {super.key,
       required this.step,
       required this.index,
-      required this.nodeTypes});
+      required this.nodeTypes,
+      this.onReplay});
   final Json step;
   final int index;
   final Map<String, String> nodeTypes;
+  final VoidCallback? onReplay;
   @override
   Widget build(BuildContext context) {
     final duration = step['duration_ms'];
@@ -1490,9 +1662,19 @@ class MomentPanel extends StatelessWidget {
               ],
               JsonBlock('INPUT', step['input']),
               JsonBlock('OUTPUT', step['output']),
+              if (onReplay != null)
+                Padding(
+                    padding: const EdgeInsets.only(top: 14),
+                    child: FilledButton.icon(
+                        onPressed: onReplay,
+                        style: FilledButton.styleFrom(backgroundColor: pine),
+                        icon: Icon(Icons.replay, size: 16),
+                        label: Text('Re-run from here'))),
             ])));
   }
 }
+
+String shortRunId(String id) => id.length > 8 ? id.substring(0, 8) : id;
 
 String formatDurationMs(int ms) => ms < 1000
     ? '$ms ms'

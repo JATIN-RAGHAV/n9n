@@ -82,6 +82,18 @@ class Api {
     await request('POST', '/runs/$id/cancel');
   }
 
+  /// Queues a replay of [id] starting at [fromNode]; [inputOverride] replaces
+  /// what that node receives and [graph] is `original` or `draft`.
+  Future<Json> replay(String id,
+          {required String fromNode,
+          Json? inputOverride,
+          String graph = 'original'}) async =>
+      asJson((await request('POST', '/runs/$id/replay', {
+        'from_node': fromNode,
+        if (inputOverride != null) 'input_override': inputOverride,
+        'graph': graph,
+      }))['run']);
+
   Future<List<Json>> credentials() async =>
       asJsonList((await request('GET', '/credentials'))['credentials']);
   Future<Json> createCredential(String name, String kind, Json data) async =>

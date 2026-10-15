@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:n9n_web/api.dart';
 import 'package:n9n_web/main.dart';
+import 'package:n9n_web/models.dart';
 
 /// A finished run whose HTTP node needed three requests.
 const runDetail = {
@@ -78,6 +79,91 @@ MockClient inspectorClient() => MockClient((request) async {
           headers: {'content-type': 'application/json'});
     });
 
+/// A failed run: trigger -> a (set_fields) -> b (http_request), failing at b.
+final failedRunDetail = {
+  'run': {
+    'id': 'run-2',
+    'workflow_id': 'flow-1',
+    'version': 1,
+    'kind': 'normal',
+    'status': 'failed',
+    'input': {'seed': 1},
+    'error': 'boom',
+    'created_at': '2026-01-02T03:04:05Z',
+    'updated_at': '2026-01-02T03:04:07Z'
+  },
+  'steps': [
+    {
+      'node_id': 'trigger',
+      'status': 'succeeded',
+      'input': {'seed': 1},
+      'output': {'seed': 1},
+      'attempt': 1,
+      'duration_ms': 1,
+      'created_at': '2026-01-02T03:04:05Z'
+    },
+    {
+      'node_id': 'a',
+      'status': 'running',
+      'input': {'seed': 1},
+      'output': null,
+      'attempt': 1,
+      'created_at': '2026-01-02T03:04:05Z'
+    },
+    {
+      'node_id': 'a',
+      'status': 'succeeded',
+      'input': {'seed': 1},
+      'output': {'stage': 'alpha-output'},
+      'attempt': 1,
+      'duration_ms': 20,
+      'created_at': '2026-01-02T03:04:06Z'
+    },
+    {
+      'node_id': 'b',
+      'status': 'failed',
+      'input': {'stage': 'alpha-output'},
+      'output': null,
+      'error': 'boom',
+      'attempt': 1,
+      'duration_ms': 5,
+      'created_at': '2026-01-02T03:04:07Z'
+    }
+  ],
+  'node_types': {
+    'trigger': 'manual_trigger',
+    'a': 'set_fields',
+    'b': 'http_request'
+  },
+  'graph': {
+    'nodes': [
+      {
+        'id': 'trigger',
+        'type': 'manual_trigger',
+        'position': {'x': 100, 'y': 100},
+        'config': {}
+      },
+      {
+        'id': 'a',
+        'type': 'set_fields',
+        'position': {'x': 400, 'y': 100},
+        'config': {'fields': {}}
+      },
+      {
+        'id': 'b',
+        'type': 'http_request',
+        'position': {'x': 700, 'y': 100},
+        'config': {'url': 'https://example.com', 'method': 'GET'}
+      },
+    ],
+    'edges': [
+      {'id': 'e1', 'source': 'trigger', 'target': 'a', 'source_port': 'out'},
+      {'id': 'e2', 'source': 'a', 'target': 'b', 'source_port': 'out'},
+    ]
+  },
+  'children': [],
+};
+
 void main() {
   testWidgets('run inspector shows step durations and retry attempts',
       (tester) async {
@@ -123,95 +209,12 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final detail = {
-      'run': {
-        'id': 'run-2',
-        'workflow_id': 'flow-1',
-        'version': 1,
-        'kind': 'normal',
-        'status': 'failed',
-        'input': {'seed': 1},
-        'error': 'boom',
-        'created_at': '2026-01-02T03:04:05Z',
-        'updated_at': '2026-01-02T03:04:07Z'
-      },
-      'steps': [
-        {
-          'node_id': 'trigger',
-          'status': 'succeeded',
-          'input': {'seed': 1},
-          'output': {'seed': 1},
-          'attempt': 1,
-          'duration_ms': 1,
-          'created_at': '2026-01-02T03:04:05Z'
-        },
-        {
-          'node_id': 'a',
-          'status': 'running',
-          'input': {'seed': 1},
-          'output': null,
-          'attempt': 1,
-          'created_at': '2026-01-02T03:04:05Z'
-        },
-        {
-          'node_id': 'a',
-          'status': 'succeeded',
-          'input': {'seed': 1},
-          'output': {'stage': 'alpha-output'},
-          'attempt': 1,
-          'duration_ms': 20,
-          'created_at': '2026-01-02T03:04:06Z'
-        },
-        {
-          'node_id': 'b',
-          'status': 'failed',
-          'input': {'stage': 'alpha-output'},
-          'output': null,
-          'error': 'boom',
-          'attempt': 1,
-          'duration_ms': 5,
-          'created_at': '2026-01-02T03:04:07Z'
-        }
-      ],
-      'node_types': {
-        'trigger': 'manual_trigger',
-        'a': 'set_fields',
-        'b': 'http_request'
-      },
-      'graph': {
-        'nodes': [
-          {
-            'id': 'trigger',
-            'type': 'manual_trigger',
-            'position': {'x': 100, 'y': 100},
-            'config': {}
-          },
-          {
-            'id': 'a',
-            'type': 'set_fields',
-            'position': {'x': 400, 'y': 100},
-            'config': {'fields': {}}
-          },
-          {
-            'id': 'b',
-            'type': 'http_request',
-            'position': {'x': 700, 'y': 100},
-            'config': {'url': 'https://example.com', 'method': 'GET'}
-          },
-        ],
-        'edges': [
-          {'id': 'e1', 'source': 'trigger', 'target': 'a', 'source_port': 'out'},
-          {'id': 'e2', 'source': 'a', 'target': 'b', 'source_port': 'out'},
-        ]
-      },
-      'children': [],
-    };
     final client = MockClient((request) async {
       final payload = switch (request.url.path) {
         '/api/auth/me' => {
             'user': {'id': 'user-1', 'email': 'me@example.com'}
           },
-        '/api/runs/run-2' => detail,
+        '/api/runs/run-2' => failedRunDetail,
         _ => {'runs': [], 'workflows': []},
       };
       return http.Response(jsonEncode(payload), 200,
@@ -265,6 +268,126 @@ void main() {
             of: moment, matching: find.text('1. Manual trigger · trigger')),
         findsOneWidget);
     expect(canvasDecoration('trigger').border!.top.width, 3);
+  });
+
+  /// Serves the failed run, records replay requests and serves the new run.
+  MockClient replayClient(Map<String, Object?> calls) =>
+      MockClient((request) async {
+        final path = request.url.path;
+        final replayed = {
+          'id': 'run-3',
+          'workflow_id': 'flow-1',
+          'version': 1,
+          'kind': 'replay',
+          'parent_run_id': 'run-2',
+          'resume_from_node': 'b',
+          'status': 'succeeded',
+          'input': {'seed': 1},
+          'created_at': '2026-01-02T03:05:05Z',
+          'updated_at': '2026-01-02T03:05:07Z'
+        };
+        Object payload;
+        if (path == '/api/auth/me') {
+          payload = {
+            'user': {'id': 'user-1', 'email': 'me@example.com'}
+          };
+        } else if (path == '/api/runs/run-2/replay' &&
+            request.method == 'POST') {
+          calls['replay'] = jsonDecode(request.body);
+          payload = {'run': replayed};
+        } else if (path == '/api/runs/run-2') {
+          payload = failedRunDetail;
+        } else if (path == '/api/runs/run-3') {
+          payload = {
+            'run': replayed,
+            'steps': (failedRunDetail['steps'] as List).take(1).toList(),
+            'node_types': failedRunDetail['node_types'],
+            'graph': failedRunDetail['graph'],
+            'children': [],
+          };
+        } else {
+          payload = {'runs': [], 'workflows': []};
+        }
+        return http.Response(jsonEncode(payload), 200,
+            headers: {'content-type': 'application/json'});
+      });
+
+  testWidgets('re-run from here replays the step with the edited input',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final calls = <String, Object?>{};
+    await tester.pumpWidget(N9nApp(
+      api: Api(client: replayClient(calls)),
+      initialUri: Uri.parse('http://localhost/#/runs/run-2'),
+    ));
+    await tester.pumpAndSettle();
+    // The failed step is selected, so the moment panel replays from b.
+    await tester.tap(find.descendant(
+        of: find.byKey(const ValueKey('moment')),
+        matching: find.text('Re-run from here')));
+    await tester.pumpAndSettle();
+    expect(find.text('Re-run from HTTP request · b'), findsOneWidget);
+    expect(find.byKey(const ValueKey('replay-warning')), findsOneWidget);
+    expect(find.textContaining('This replay executes HTTP request · b'),
+        findsOneWidget);
+    expect(find.textContaining('"stage": "alpha-output"'), findsWidgets);
+    await tester.enterText(find.byType(TextField), '{"stage": "fixed"}');
+    await tester.tap(find.text('Start replay'));
+    await tester.pumpAndSettle();
+    final body = calls['replay'] as Map;
+    expect(body['from_node'], 'b');
+    expect(body['graph'], 'original');
+    expect(body['input_override'], {'stage': 'fixed'});
+    // The new run opens in the inspector with its lineage.
+    expect(find.text('Run run-3'), findsOneWidget);
+    expect(find.text('REPLAY FROM b'), findsOneWidget);
+    expect(find.text('Replay of run-2'), findsOneWidget);
+  });
+
+  testWidgets('failed runs offer a replay against the current draft',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final calls = <String, Object?>{};
+    await tester.pumpWidget(N9nApp(
+      api: Api(client: replayClient(calls)),
+      initialUri: Uri.parse('http://localhost/#/runs/run-2'),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Replay against current draft'));
+    await tester.pumpAndSettle();
+    expect(find.text('Re-run from HTTP request · b'), findsOneWidget);
+    final draftChip = tester.widget<ChoiceChip>(
+        find.widgetWithText(ChoiceChip, 'Current draft'));
+    expect(draftChip.selected, isTrue);
+    // Invalid JSON is caught before anything is sent.
+    await tester.enterText(find.byType(TextField), '{not json');
+    await tester.tap(find.text('Start replay'));
+    await tester.pumpAndSettle();
+    expect(find.text('Enter a valid JSON object.'), findsOneWidget);
+    expect(calls, isEmpty);
+    // Unchanged input sends no override.
+    await tester.enterText(find.byType(TextField), '{"stage": "alpha-output"}');
+    await tester.tap(find.text('Start replay'));
+    await tester.pumpAndSettle();
+    final body = calls['replay'] as Map;
+    expect(body['graph'], 'draft');
+    expect(body['from_node'], 'b');
+    expect(body.containsKey('input_override'), isFalse);
+    expect(find.text('Run run-3'), findsOneWidget);
+  });
+
+  test('downstream nodes list the step and everything after it', () {
+    final draft = WorkflowDraft.fromJson(
+        Map<String, dynamic>.from(failedRunDetail['graph'] as Map));
+    expect(downstreamNodes(draft, 'a').map((n) => n.id), ['a', 'b']);
+    expect(downstreamNodes(draft, 'b').map((n) => n.id), ['b']);
+    expect(downstreamNodes(draft, 'ghost'), isEmpty);
   });
 
   test('durations read naturally at every scale', () {
