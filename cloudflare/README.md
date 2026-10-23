@@ -1,6 +1,6 @@
 # n9n on Cloudflare (Workers free plan)
 
-_Last updated: 2026-10-23 17:24 IST · Claude Opus 5.5 (claude-opus-5-5)_
+_Last updated: 2026-10-23 17:33 IST · Claude Opus 5.5 (claude-opus-5-5)_
 
 This folder deploys n9n to `https://n9n.walrus.codes` as one Cloudflare Worker on the **free plan**:
 
@@ -69,7 +69,7 @@ BACKEND_URL=http://localhost:8787 RUNNER_TOKEN=... runner/target/release/n9n-run
 
 ## Free-plan limits to watch
 
-- **CPU: 10 ms per request.** Registration and login run 100,000 PBKDF2 iterations, which can exceed it. Cloudflare tolerates occasional overruns. If logins fail with "exceeded CPU", lower `PASSWORD_PBKDF2_ITERATIONS` (minimum 10,000) or move to Workers Paid. Not yet measured on the live Worker.
+- **CPU: 10 ms per request.** Registration and login run 100,000 PBKDF2 iterations, which can exceed it. Measured on the live Worker on 2026-10-23: 7 requests, median 4.2 ms, the registration and login requests about 36 ms, no errors. Cloudflare tolerates occasional overruns, so sign-ins work today, but a burst of them could be cut off. If logins fail with "exceeded CPU", lower `PASSWORD_PBKDF2_ITERATIONS` (minimum 10,000, about a quarter of the CPU and a weaker hash) or move to Workers Paid.
 - **100,000 requests and 100,000 database queries a day.** A runner polling every second uses about 86,400 claim requests a day on its own; set `RUNNER_POLL_MS` to 5000 or more when the runner is attached.
 - **5 Cron Triggers per account**; this Worker uses one.
 
