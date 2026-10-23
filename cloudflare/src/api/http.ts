@@ -65,13 +65,15 @@ function zero(t: FieldType): unknown {
 function typeName(v: unknown): string {
   if (Array.isArray(v)) return "array";
   if (v === null) return "null";
+  if (typeof v === "boolean") return "bool";
   return typeof v;
 }
 
 /** Converts one decoded field the way encoding/json fills a Go struct field. */
 export function field(name: string, t: FieldType, v: unknown): unknown {
   if (v === null || v === undefined) return zero(t);
-  const bad = () => new HttpError(400, `json: cannot unmarshal ${typeName(v)} into Go struct field .${name}`);
+  const goType = { string: "string", bool: "bool", int: "int", intPtr: "int", object: "map[string]interface {}", any: "interface {}" }[t];
+  const bad = () => new HttpError(400, `json: cannot unmarshal ${typeName(v)} into Go struct field .${name} of type ${goType}`);
   switch (t) {
     case "string":
       if (typeof v !== "string") throw bad();
