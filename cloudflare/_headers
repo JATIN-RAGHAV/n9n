@@ -1,0 +1,5 @@
+# Copied into the Flutter build output by build-web.sh. Mirrors web/nginx.conf:
+# cross-origin isolation lets the wasm renderer use multi-threading.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless

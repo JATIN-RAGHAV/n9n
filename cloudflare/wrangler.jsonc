@@ -1,0 +1,53 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "n9n",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-23",
+  "upload_source_maps": true,
+  "observability": { "enabled": true },
+
+  // The Flutter web build is served from Cloudflare's edge cache as static
+  // assets. Only API, health and internal paths reach the Worker script.
+  "assets": {
+    "directory": "../web/build/web",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/healthz", "/internal/*"]
+  },
+
+  // One container image runs the Go API and the Rust runner side by side.
+  // Built from the repository root so the Dockerfile can see backend/ and runner/.
+  "containers": [
+    {
+      "class_name": "N9nContainer",
+      "image": "./Dockerfile",
+      "image_build_context": "..",
+      "instance_type": "lite",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "N9N", "class_name": "N9nContainer" }]
+  },
+  "exports": {
+    "N9nContainer": { "type": "durable-object", "storage": "sqlite" }
+  },
+
+  // Keeps the single container warm so schedule and Gmail triggers keep polling.
+  "triggers": { "crons": ["*/5 * * * *"] },
+
+  // Non-secret settings forwarded to the container. Override per deployment
+  // with `wrangler deploy --var` or by editing this block.
+  "vars": {
+    "COOKIE_SECURE": "true",
+    "ALLOWED_ORIGIN": "",
+    "RUN_RETENTION_DAYS": "30",
+    "RUNNER_CONCURRENCY": "4",
+    "RUNNER_POLL_MS": "1000",
+    "ALLOW_PRIVATE_HTTP": "false",
+    "GOOGLE_CLIENT_ID": "",
+    "GOOGLE_REDIRECT_URI": ""
+  },
+  // Set with `wrangler secret put <NAME>`; GOOGLE_CLIENT_SECRET is optional.
+  "secrets": { "required": ["DATABASE_URL", "ENCRYPTION_KEY", "RUNNER_TOKEN"] }
+}

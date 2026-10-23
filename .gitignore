@@ -10,3 +10,4 @@ backend/n9n-backend
 *.db-wal
 
 __pycache__/
+.wrangler/
