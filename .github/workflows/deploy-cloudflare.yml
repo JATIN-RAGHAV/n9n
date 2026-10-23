@@ -26,8 +26,32 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
+  # Two pushes close together finish CI in either order, and each triggers a
+  # deploy. Runs are queued (concurrency above), so when a run starts it checks
+  # that its commit is still the head of main; an older commit is skipped so
+  # it cannot overwrite a newer deploy.
+  latest:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      current: ${{ steps.check.outputs.current }}
+    steps:
+      - id: check
+        env:
+          WANT: ${{ github.event.workflow_run.head_sha || github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          head=$(git ls-remote "https://github.com/$REPO" refs/heads/main | cut -f1)
+          if [ "$WANT" = "$head" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping $WANT: main is now at $head, which deploys separately."
+          fi
+
+  deploy:
+    needs: latest
+    if: needs.latest.outputs.current == 'true'
     runs-on: ubuntu-latest
     environment: production
     steps:
