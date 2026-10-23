@@ -94,6 +94,14 @@ Gmail triggers and send-email nodes need a Google OAuth client:
 4. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env`, then run `make up`.
 5. In the app, open **Credentials → Connect Gmail**, then assign the credential to each email node.
 
+### Deploy to Cloudflare
+
+`cloudflare/` deploys the stack with Wrangler: the Flutter app as Workers static assets at the edge, the Go API and Rust runner in one Cloudflare Container, and PostgreSQL on any provider you choose. See [cloudflare/README.md](cloudflare/README.md).
+
+```sh
+cd cloudflare && npm install && npm run deploy
+```
+
 ### Mobile app (Android / iOS)
 
 With the stack running, and Node.js 22 or newer installed:
