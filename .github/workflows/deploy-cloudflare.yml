@@ -1,0 +1,87 @@
+name: Deploy to Cloudflare
+
+# Deploys n9n to https://n9n.walrus.codes after CI passes on main, or on demand.
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   CLOUDFLARE_API_TOKEN   token from the personal Cloudflare account with
+#                          "Edit Cloudflare Workers" + Containers + Workers Routes/Custom Domains (zone walrus.codes)
+#   CLOUDFLARE_ACCOUNT_ID  c56108842624423a9796253cf8d9300a
+#   DATABASE_URL           Supabase session pooler URL (port 5432, ?sslmode=require)
+#   ENCRYPTION_KEY         64 hex chars; never change it after the first deploy
+#   RUNNER_TOKEN           64 hex chars
+# Optional: GOOGLE_CLIENT_SECRET (for Gmail nodes).
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudflare
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.35.7
+          channel: stable
+          cache: true
+
+      - name: Build web app
+        run: ./cloudflare/build-web.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+
+      - name: Install Wrangler
+        working-directory: cloudflare
+        run: npm ci
+
+      - name: Write secrets file
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          RUNNER_TOKEN: ${{ secrets.RUNNER_TOKEN }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          umask 077
+          jq -n '{DATABASE_URL: env.DATABASE_URL, ENCRYPTION_KEY: env.ENCRYPTION_KEY, RUNNER_TOKEN: env.RUNNER_TOKEN}
+                 + (if (env.GOOGLE_CLIENT_SECRET // "") != "" then {GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET} else {} end)' \
+            > "$RUNNER_TEMP/n9n-secrets.json"
+
+      - name: Deploy (builds the container image and pushes it)
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --secrets-file "$RUNNER_TEMP/n9n-secrets.json"
+
+      - name: Remove secrets file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/n9n-secrets.json"
+
+      - name: Check the live site
+        run: |
+          curl -fsS --retry 5 --retry-delay 5 https://n9n.walrus.codes/healthz
+          for i in $(seq 1 24); do
+            if curl -fsS --max-time 30 https://n9n.walrus.codes/api/health; then exit 0; fi
+            sleep 10
+          done
+          echo "API did not become healthy within 4 minutes" >&2
+          exit 1

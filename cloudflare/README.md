@@ -1,6 +1,6 @@
 # n9n on Cloudflare (Workers + Containers)
 
-_Last updated: 2026-10-23 13:45 IST · Claude Fable 5.1 (claude-fable-5-1)_
+_Last updated: 2026-10-23 16:48 IST · Claude Opus 5.5 (claude-opus-5-5)_
 
 This folder deploys the whole n9n stack to Cloudflare with Wrangler:
 
@@ -31,6 +31,12 @@ npm run deploy                            # builds web, builds the image, pushes
 `ALLOWED_ORIGIN` and `GOOGLE_REDIRECT_URI` in the `vars` block already point at `https://n9n.walrus.codes`; change them if the hostname changes. Gmail also needs `GOOGLE_CLIENT_ID` (var) and `GOOGLE_CLIENT_SECRET` (`wrangler secret put`).
 
 The Worker is bound to the custom domain `n9n.walrus.codes` (`routes` in `wrangler.jsonc`); Wrangler creates the DNS record and certificate on deploy. Check: `https://n9n.walrus.codes/healthz` (Worker) and `/api/health` (container). The first API call after a deploy takes 10–30 s while the container boots and the API runs migrations.
+
+## Continuous deployment
+
+`.github/workflows/deploy-cloudflare.yml` deploys automatically when the `CI` workflow succeeds on `main`, and can be run by hand from the Actions tab. It builds the web app, then runs `wrangler deploy --secrets-file`, so the runtime secrets go from GitHub to Cloudflare on every deploy, and finally checks `/healthz` and `/api/health` on the live site.
+
+Add these repository secrets under Settings, Secrets and variables, Actions: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `DATABASE_URL`, `ENCRYPTION_KEY`, `RUNNER_TOKEN`, and optionally `GOOGLE_CLIENT_SECRET`. The job runs in the `production` environment, so you can add a required reviewer there if you want to approve each deploy.
 
 ## How requests flow
 
