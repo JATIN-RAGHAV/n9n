@@ -36,8 +36,8 @@ open(os.path.join(out, "latency_table.tex"), "w").write("\n".join(rows) + "\n\\b
 rows = [f"{lv} & {f(T[lv]['makespan_s'],2)} & {f(T[lv]['runs_per_s'],1)} & {T[lv]['succeeded']}/{T[lv]['runs']} \\\\" for lv in levels]
 open(os.path.join(out, "throughput_table.tex"), "w").write("\n".join(rows) + "\n\\bottomrule\n")
 
-rows = [f"Steps copied from parent (median) & 0 & {f(R['steps_copied']['median'],0)} \\\\",
-        f"Steps executed (median) & {R['chain_nodes']} & {f(R['steps_executed']['median'],0)} \\\\",
+rows = [f"Steps copied from parent & 0 & {f(R['steps_copied']['median'],0)} \\\\",
+        f"Steps executed & {R['chain_nodes']} & {f(R['steps_executed']['median'],0)} \\\\",
         f"Wall time, median (ms) & {f(R['full_wall_ms']['median'])} & {f(R['replay_wall_ms']['median'])} \\\\",
         f"Wall time, p95 (ms) & {f(R['full_wall_ms']['p95'])} & {f(R['replay_wall_ms']['p95'])} \\\\"]
 open(os.path.join(out, "replay_table.tex"), "w").write("\n".join(rows) + "\n\\bottomrule\n")
@@ -46,8 +46,8 @@ rows = []
 for r in S:
     url = r["url"].replace("http://127.0.0.1:18090", "mock").replace("https://", "").replace("www.", "").rstrip("/")
     if r["kind"] == "mock" and "/flaky/" in url: url = "mock/flaky (500,500,200)"
-    st = r["http_status"] or (r["attempts"][-1][0] if r["attempts"] else "--")
-    ms = r["fetch_ms"] if r["fetch_ms"] is not None else "--"
+    st = r["http_status"] or (r["attempts"][-1][0] if r["attempts"] else "none")
+    ms = r["fetch_ms"] if r["fetch_ms"] is not None else "none"
     rows.append(f"{esc(url)} & {st} & {len(r['attempts'])} & {ms} & {esc(str(r['verdict']))} \\\\")
 open(os.path.join(out, "seo_table.tex"), "w").write("\n".join(rows) + "\n\\bottomrule\n")
 
@@ -56,7 +56,7 @@ rows = []
 for k, v in F.items():
     call = [s for s in v["steps"] if s["node"] == "call"]
     att = max((s["attempt"] for s in call), default=0)
-    last = call[-1]["status"] if call else "--"
+    last = call[-1]["status"] if call else "none"
     rows.append(f"{labels[k]} & \\emph{{{v['final_status']}}} & {f(v['seconds_kill_to_terminal'])} & call: {last}, attempt {att}{'; ' + esc(v['error']) if v['error'] else ''} \\\\")
 open(os.path.join(out, "fault_table.tex"), "w").write("\n".join(rows) + "\n\\bottomrule\n")
 print("tables written")

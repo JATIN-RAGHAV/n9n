@@ -3,7 +3,7 @@
 \documentclass[conference]{IEEEtran}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage{cite}
+\usepackage[nocompress]{cite}
 \usepackage{amsmath}
 \usepackage{graphicx}
 \usepackage{booktabs}
@@ -41,7 +41,7 @@
 \maketitle
 
 \begin{abstract}
-Rule-based workflow platforms such as Zapier, Make, n8n and Node-RED execute fixed trigger--action chains reliably but cannot interpret context or recover from states they were not programmed for. Large language model (LLM) agents can reason, plan and call tools, but benchmark studies show that they remain unreliable on open-ended tasks and that their execution is neither reproducible nor auditable. This paper studies how the two paradigms can be combined into one production-oriented platform, with search engine optimisation (SEO) auditing as the application domain. We review twenty-two works on reasoning-and-acting loops, tool use, multi-agent coordination, agent evaluation and generative engine optimisation, compare them on the properties a production workflow engine needs, and identify the gap: no reviewed system provides durable, replayable, side-effect-safe execution as the substrate on which agentic decisions are made. We then present n9n, a hybrid platform whose deterministic substrate (a Go API, a Rust worker and PostgreSQL) is implemented, and whose agentic layer (a prompt-to-workflow builder with a validate-and-repair loop, and a run-failure explainer with a code-enforced retry rule) and SEO layer are specified on top of it. The substrate is evaluated on a local deployment: a seven-node branching workflow completes in a median of \LATmedian{} ms end to end with \LATstepsum{} ms of recorded step time; a burst of 100 runs sustains \THRone{}, \THRfour{} and \THReight{} runs/s at worker concurrency 1, 4 and 8; replaying a nine-node run from its sixth node re-executes only \REPexec{} steps and reuses \REPcopy{}; a technical SEO audit workflow built from existing nodes classifies status, redirect, retry and missing-title cases correctly; and a worker killed during a side-effecting step is recovered as \emph{queued} and completed when the step is idempotent, and marked \emph{uncertain} when it is not, with the verdict recorded \FAULTrecover{} s after the lease expires. These results characterise the substrate only; the agentic and SEO reasoning components are not yet measured, and an evaluation plan for them is given.
+Rule-based workflow platforms such as Zapier, Make, n8n and Node-RED execute fixed trigger-to-action chains reliably but cannot interpret context or recover from states they were not programmed for. Large language model (LLM) agents can reason, plan and call tools, but benchmark studies show that they remain unreliable on open-ended tasks and that their execution is neither reproducible nor auditable. This paper studies how the two paradigms can be combined into one production-oriented platform, with search engine optimisation (SEO) auditing as the application domain. We review twenty-four works (twenty-two research papers and the documentation of two platforms) on reasoning-and-acting loops, tool use, multi-agent coordination, agent evaluation and generative engine optimisation, compare them on the properties a production workflow engine needs, and identify the gap: no reviewed system provides durable, replayable, side-effect-safe execution as the substrate on which agentic decisions are made. We then present n9n, a hybrid platform whose deterministic substrate (a Go API, a Rust worker and PostgreSQL) is implemented, and whose agentic layer (a prompt-to-workflow builder with a validate-and-repair loop, and a run-failure explainer with a code-enforced retry rule) and SEO layer are specified on top of it. The substrate is evaluated on a local deployment: a seven-node branching workflow completes in a median of \LATmedian{} ms end to end with \LATstepsum{} ms of recorded step time; a burst of 100 runs sustains \THRone{}, \THRfour{} and \THReight{} runs/s at worker concurrency 1, 4 and 8; replaying a nine-node run from its sixth node re-executes only \REPexec{} steps and reuses \REPcopy{}; a technical SEO audit workflow built from existing nodes classifies status, redirect, retry and missing-title cases correctly; and a worker killed during a side-effecting step is recovered as \emph{queued} and completed when the step is idempotent, and marked \emph{uncertain} when it is not, with the verdict recorded within about half a second of the lease expiring. These results characterise the substrate only; the agentic and SEO reasoning components are not yet measured, and an evaluation plan for them is given.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -57,7 +57,7 @@ This paper takes SEO auditing as the application domain. Technical SEO checks (r
 
 The paper makes five contributions:
 \begin{enumerate}
-\item a structured review of twenty-two works on reasoning-and-acting, tool use, multi-agent coordination, agent evaluation and GEO, each with its limitation for production workflow use;
+\item a structured review of twenty-four works on reasoning-and-acting, tool use, multi-agent coordination, agent evaluation and GEO, each with its limitation for production workflow use;
 \item a comparative analysis and a research gap centred on the absence of a durable, replayable substrate beneath agentic decisions;
 \item the design of n9n, a three-layer platform: a deterministic substrate, an agentic layer and an SEO layer;
 \item an implementation of the substrate (Go API, Rust worker, PostgreSQL, Flutter web and React Native clients) and its measured evaluation on latency, throughput, replay, fault recovery and a technical SEO audit workflow; and
@@ -66,7 +66,7 @@ The paper makes five contributions:
 Section~II states the review scope, Section~III reviews the works, Section~IV compares them and Section~V states the gap. Section~VI presents n9n, Section~VII maps it to the literature, Section~VIII reports the implementation and its evaluation, Section~IX gives limitations, Section~X the evaluation plan and Section~XI concludes.
 
 \section{Review Scope and Priority}
-The review covers twenty-two works selected for their relevance to running LLM decisions inside an automated workflow. Bibliographic details were checked against the arXiv record or the publisher page of each work; where a venue could not be confirmed from the record, the arXiv identifier is cited. The works fall into four strands, listed in the order of their importance to n9n:
+The review covers twenty-four works (twenty-two research papers and the public documentation of n8n and LangGraph) selected for their relevance to running LLM decisions inside an automated workflow. Bibliographic details were checked against the arXiv record or the publisher page of each work; where a venue could not be confirmed from the record, the arXiv identifier is cited. The works fall into four strands, listed in the order of their importance to n9n:
 \begin{itemize}
 \item \textbf{Strand 1, single-agent reasoning and tool use:} ReAct, Toolformer, Plan-and-Solve, Tree of Thoughts, Reflexion, Self-Ask, CodeAct and Gorilla. These define how one model plans, acts and calls tools, which is what an agent node in a workflow does.
 \item \textbf{Strand 2, multi-agent and orchestration frameworks:} AutoGen, CAMEL, MetaGPT, HuggingGPT, Voyager, and the platforms n8n and LangGraph. These define how several agents or steps are coordinated.
@@ -86,7 +86,7 @@ Schick et al. \cite{schick2023toolformer} train a model, in a self-supervised wa
 Wang et al. \cite{wang2023plansolve} first ask the model for a plan that divides the task into subtasks and then for their execution, reducing the missing-step errors of zero-shot chain-of-thought across ten datasets. \emph{Limitation:} the gains are shown on reasoning benchmarks; the plan is text and is not validated against an executable schema. \emph{Relevance:} n9n's workflow builder asks a model for a plan in the form of a graph and validates that graph with the same code that guards publishing.
 
 \subsection{Tree of Thoughts}
-Yao et al. \cite{yao2023tot} treat each reasoning step as a node in a search tree that the model explores, evaluates and backtracks over; on Game of 24, GPT-4 with chain-of-thought solved 4\% of instances and Tree of Thoughts 74\%. \emph{Limitation:} search multiplies model calls and cost, and the evaluation covers three puzzle-like tasks. \emph{Relevance:} search over candidate graphs is a possible extension of the builder's repair loop, but its cost argues for bounding it, as n9n does with a fixed number of repair rounds.
+Yao et al. \cite{yao2023tot} treat each reasoning step as a node in a search tree that the model explores, evaluates and backtracks over; on Game of 24, GPT-4 with chain-of-thought solved 4\% of instances and Tree of Thoughts 74\%. \emph{Limitation:} search multiplies model calls and cost, and the evaluation covers three tasks (Game of 24, Creative Writing and Mini Crosswords). \emph{Relevance:} search over candidate graphs is a possible extension of the builder's repair loop, but its cost argues for bounding it, as n9n does with a fixed number of repair rounds.
 
 \subsection{Reflexion}
 Shinn et al. \cite{shinn2023reflexion} reinforce agents through linguistic feedback rather than weight updates: the agent reflects on a failed trial, stores the reflection in an episodic memory and uses it in the next trial, reaching 91\% pass@1 on HumanEval. \emph{Limitation:} the method assumes trials can be repeated freely, which is false for workflows with side effects such as sending email. \emph{Relevance:} n9n's failure explainer is a one-shot, human-reviewed form of reflection; the platform forbids automatic retries of non-idempotent steps.
@@ -116,7 +116,7 @@ Shen et al. \cite{shen2023hugginggpt} use a chat model as a controller that plan
 Wang et al. \cite{wang2023voyager} sustain open-ended behaviour in Minecraft with an automatic curriculum, a library of skills stored as executable code and iterative prompting driven by execution errors. \emph{Limitation:} the setting is a game with no side effects outside it. \emph{Relevance:} a published workflow version is a reusable skill; n9n stores versions immutably so a skill cannot change under a running job.
 
 \subsection{n8n and LangGraph}
-n8n \cite{n8n} is an open-source node-based automation platform with hundreds of integrations and an AI agent node; LangGraph \cite{langgraph} orchestrates stateful agent graphs with checkpointing and human-in-the-loop interrupts. \emph{Limitation:} both allow cycles and arbitrary code in nodes, which makes publish-time validation weak, and neither records per-request attempts or classifies an interrupted side effect as uncertain. \emph{Relevance:} they are the closest systems to n9n, which deliberately restricts the graph to a validated directed acyclic graph with one trigger.
+n8n \cite{n8n} is an open-source node-based automation platform with hundreds of integrations and an AI agent node; LangGraph \cite{langgraph} orchestrates stateful agent graphs with checkpointing and human-in-the-loop interrupts. \emph{Limitation:} both allow cycles and arbitrary code in nodes, which makes publish-time validation weak, and neither documents a per-request attempt record or classifies an interrupted side effect as uncertain. \emph{Relevance:} they are the closest systems to n9n, which deliberately restricts the graph to a validated directed acyclic graph with one trigger.
 
 \subsection{WebArena}
 Zhou et al. \cite{zhou2024webarena} provide self-hosted, functional websites in four domains with tasks graded on functional correctness; the best GPT-4 agent reaches 14.41\% end-to-end success against 78.24\% for humans. \emph{Limitation:} the environment is web interaction only. \emph{Relevance:} it quantifies why an agent must not be given unsupervised control of side-effecting steps.
@@ -131,16 +131,16 @@ Mialon et al. \cite{mialon2023gaia} pose 466 real-world assistant questions that
 Yao et al. \cite{yao2024taubench} simulate conversations between a user model and a tool-using agent under policy constraints, score success by the final database state and introduce pass\^{}k for reliability over repeated trials; GPT-4o passes fewer than half the tasks and has pass\^{}8 below 25\% in retail. \emph{Limitation:} the user is simulated. \emph{Relevance:} pass\^{}k is the metric n9n adopts for its agentic components, and database-state checking matches n9n's recorded step outputs.
 
 \subsection{SWE-agent}
-Yang et al. \cite{yang2024sweagent} show that an agent--computer interface designed for a model, with constrained file and repository commands, changes agent behaviour and reaches 12.5\% pass@1 on SWE-bench. \emph{Limitation:} the interface is specific to software repositories. \emph{Relevance:} it argues that the interface offered to an agent should be narrow and typed, as n9n's node catalogue is.
+Yang et al. \cite{yang2024sweagent} show that an agent-computer interface designed for a model, with constrained file and repository commands, changes agent behaviour and reaches 12.5\% pass@1 on SWE-bench. \emph{Limitation:} the interface is specific to software repositories. \emph{Relevance:} it argues that the interface offered to an agent should be narrow and typed, as n9n's node catalogue is.
 
 \subsection{GEO: Generative Engine Optimization}
 Aggarwal et al. \cite{aggarwal2024geo} formalise generative engines, propose a black-box framework for raising a source's visibility in generated answers and release GEO-bench; the best strategies raise visibility by up to 40\%, but efficacy varies by domain. \emph{Limitation:} the work optimises content for visibility and does not address auditing a site's technical health. \emph{Relevance:} it defines the content-side SEO tasks that n9n's agent nodes would perform, after deterministic technical checks pass.
 
 \subsection{Surveys}
-Wang et al. \cite{wang2024survey} propose a unified construction framework for LLM agents and review applications and evaluation; Xi et al. \cite{xi2023rise} frame agents as brain, perception and action, and discuss single-agent, multi-agent and human--agent settings; Masterman et al. \cite{masterman2024landscape} compare single- and multi-agent architectures and discuss leadership and communication styles. \emph{Limitation:} as surveys they name open problems rather than solving them. \emph{Relevance:} all three list reliability, evaluation and safe tool use as open, which is the gap this paper addresses from the systems side.
+Wang et al. \cite{wang2024survey} propose a unified construction framework for LLM agents and review applications and evaluation; Xi et al. \cite{xi2023rise} frame agents as brain, perception and action, and discuss single-agent, multi-agent and human-agent settings; Masterman et al. \cite{masterman2024landscape} compare single- and multi-agent architectures and discuss leadership and communication styles. \emph{Limitation:} as surveys they name open problems rather than solving them. \emph{Relevance:} all three list reliability, evaluation and safe tool use as open, which is the gap this paper addresses from the systems side.
 
 \section{Comparative Analysis}
-Table~\ref{tab:compare} compares the reviewed works on the properties a production workflow substrate needs: whether execution state is durable, whether a run can be replayed from a step, whether side effects are protected against duplication, and whether outputs are validated by code before use. The columns are judged from each work's own description; a dash means the work does not address the property, which is not a criticism of its goals.
+Table~\ref{tab:compare} compares the reviewed works on the properties a production workflow substrate needs: whether execution state is durable, whether a run can be replayed from a step, whether side effects are protected against duplication, and whether outputs are validated by code before use. The columns are judged from each work's own description; \emph{no} means the work does not address the property, which is not a criticism of its goals.
 
 \begin{table*}[!t]
 \centering
@@ -151,28 +151,28 @@ Table~\ref{tab:compare} compares the reviewed works on the properties a producti
 \toprule
 \textbf{Work} & \textbf{Strand} & \textbf{Main contribution} & \textbf{Durable state} & \textbf{Replay} & \textbf{Side-effect safety} & \textbf{n9n use} \\
 \midrule
-ReAct \cite{yao2023react} & Single agent & Interleaved reasoning and acting & -- & -- & -- & Execution model of an agent node \\
-Toolformer \cite{schick2023toolformer} & Single agent & Self-supervised tool calling & -- & -- & -- & Tool calls become HTTP/email steps \\
-Plan-and-Solve \cite{wang2023plansolve} & Single agent & Plan before execution & -- & -- & -- & Builder plans a graph, then it is validated \\
-Tree of Thoughts \cite{yao2023tot} & Single agent & Search over reasoning steps & -- & -- & -- & Bounded repair rounds instead of open search \\
-Reflexion \cite{shinn2023reflexion} & Single agent & Verbal self-reflection across trials & Episodic memory (in process) & -- & -- & One-shot failure explainer, human reviewed \\
-Self-Ask \cite{press2023selfask} & Single agent & Decomposition into sub-questions & -- & -- & -- & Explicit nodes rather than one agent \\
-CodeAct \cite{wang2024codeact} & Single agent & Code as the action space & -- & -- & -- & Sandboxed code node, off by default \\
-Gorilla \cite{patil2023gorilla} & Single agent & API-call synthesis with retrieval & -- & -- & -- & Catalogue schemas in the builder prompt \\
-AutoGen \cite{wu2023autogen} & Multi-agent & Conversable agents incl. humans & -- & -- & -- & Approval node as human agent \\
-CAMEL \cite{li2023camel} & Multi-agent & Role-playing agents & -- & -- & -- & Separate content and verification roles \\
-MetaGPT \cite{hong2023metagpt} & Multi-agent & SOPs and verified intermediates & -- & -- & -- & Validator between agent and use \\
-HuggingGPT \cite{shen2023hugginggpt} & Multi-agent & LLM controller over a model hub & -- & -- & -- & Planning over a node catalogue \\
-Voyager \cite{wang2023voyager} & Multi-agent & Skill library, curriculum & Skill library & -- & -- & Immutable workflow versions as skills \\
-n8n \cite{n8n} & Platform & Node-based automation with AI node & Yes & Partial (re-run) & -- & Closest product; n9n restricts graphs \\
-LangGraph \cite{langgraph} & Platform & Stateful agent graphs, checkpoints & Yes & From checkpoint & -- & Checkpointing; n9n adds uncertain state \\
-WebArena \cite{zhou2024webarena} & Evaluation & Functional web tasks & -- & -- & -- & Bounds autonomy of agent nodes \\
-AgentBench \cite{liu2024agentbench} & Evaluation & Eight-environment benchmark & -- & -- & -- & Model chosen by configuration \\
-GAIA \cite{mialon2023gaia} & Evaluation & Real assistant questions & -- & -- & -- & Keep deterministic checks deterministic \\
-$\tau$-bench \cite{yao2024taubench} & Evaluation & State-based scoring, pass\^{}k & -- & -- & -- & Metric for the agentic layer \\
-SWE-agent \cite{yang2024sweagent} & Evaluation & Agent--computer interface design & -- & -- & -- & Narrow, typed node interface \\
-GEO \cite{aggarwal2024geo} & SEO & Visibility in generative engines & -- & -- & -- & Content tasks for agent nodes \\
-Surveys \cite{wang2024survey,xi2023rise,masterman2024landscape} & Survey & Design space, open problems & -- & -- & -- & Framing of the gap \\
+ReAct \cite{yao2023react} & Single agent & Interleaved reasoning and acting & no & no & no & Execution model of an agent node \\
+Toolformer \cite{schick2023toolformer} & Single agent & Self-supervised tool calling & no & no & no & Tool calls become HTTP/email steps \\
+Plan-and-Solve \cite{wang2023plansolve} & Single agent & Plan before execution & no & no & no & Builder plans a graph, then it is validated \\
+Tree of Thoughts \cite{yao2023tot} & Single agent & Search over reasoning steps & no & no & no & Bounded repair rounds instead of open search \\
+Reflexion \cite{shinn2023reflexion} & Single agent & Verbal self-reflection across trials & Episodic memory (in process) & no & no & One-shot failure explainer, human reviewed \\
+Self-Ask \cite{press2023selfask} & Single agent & Decomposition into sub-questions & no & no & no & Explicit nodes rather than one agent \\
+CodeAct \cite{wang2024codeact} & Single agent & Code as the action space & no & no & no & Sandboxed code node, off by default \\
+Gorilla \cite{patil2023gorilla} & Single agent & API-call synthesis with retrieval & no & no & no & Catalogue schemas in the builder prompt \\
+AutoGen \cite{wu2023autogen} & Multi-agent & Conversable agents incl. humans & no & no & no & Approval node as human agent \\
+CAMEL \cite{li2023camel} & Multi-agent & Role-playing agents & no & no & no & Separate content and verification roles \\
+MetaGPT \cite{hong2023metagpt} & Multi-agent & SOPs and verified intermediates & no & no & no & Validator between agent and use \\
+HuggingGPT \cite{shen2023hugginggpt} & Multi-agent & LLM controller over a model hub & no & no & no & Planning over a node catalogue \\
+Voyager \cite{wang2023voyager} & Multi-agent & Skill library, curriculum & Skill library & no & no & Immutable workflow versions as skills \\
+n8n \cite{n8n} & Platform & Node-based automation with AI node & Yes & From failed node (retry) & no & Closest product; n9n restricts graphs \\
+LangGraph \cite{langgraph} & Platform & Stateful agent graphs, checkpoints & Yes & From checkpoint & no & Checkpointing; n9n adds uncertain state \\
+WebArena \cite{zhou2024webarena} & Evaluation & Functional web tasks & no & no & no & Bounds autonomy of agent nodes \\
+AgentBench \cite{liu2024agentbench} & Evaluation & Eight-environment benchmark & no & no & no & Model chosen by configuration \\
+GAIA \cite{mialon2023gaia} & Evaluation & Real assistant questions & no & no & no & Keep deterministic checks deterministic \\
+$\tau$-bench \cite{yao2024taubench} & Evaluation & State-based scoring, pass\^{}k & no & no & no & Metric for the agentic layer \\
+SWE-agent \cite{yang2024sweagent} & Evaluation & Agent-computer interface design & no & no & no & Narrow, typed node interface \\
+GEO \cite{aggarwal2024geo} & SEO & Visibility in generative engines & no & no & no & Content tasks for agent nodes \\
+Surveys \cite{wang2024survey,xi2023rise,masterman2024landscape} & Survey & Design space, open problems & no & no & no & Framing of the gap \\
 \bottomrule
 \end{tabular}
 \end{table*}
@@ -180,7 +180,7 @@ Surveys \cite{wang2024survey,xi2023rise,masterman2024landscape} & Survey & Desig
 \section{Research Gap}
 The reviewed literature gives a mature account of how a single model reasons and calls tools, several ways to coordinate many agents, and increasingly realistic benchmarks that show those agents succeeding on a minority of open-ended tasks. What it does not give is the systems layer that a production workflow needs around those agents:
 \begin{itemize}
-\item \textbf{No durable, replayable execution record.} ReAct-style loops and conversation frameworks keep state in process memory. LangGraph checkpoints state, but no reviewed work lets a person re-run a finished run from a chosen step with edited input while reusing the recorded upstream outputs.
+\item \textbf{No durable, replayable execution record.} ReAct-style loops and conversation frameworks keep state in process memory. LangGraph forks from a checkpoint with edited state and n8n retries from the failed node; neither records the replay as a linked run with validated lineage, lets the user replay against an edited draft, or classifies an interrupted side effect.
 \item \textbf{No treatment of interrupted side effects.} None of the works distinguishes a step that may be retried from one whose effect is unknown after a crash. Reflexion and Tree of Thoughts assume trials are free to repeat.
 \item \textbf{Validation of agent output is left to the model.} Plan-and-Solve and HuggingGPT trust the generated plan; Gorilla reduces but does not eliminate hallucinated calls. No work routes a generated artefact through the same validator that guards human-authored ones.
 \item \textbf{Deterministic and agentic steps are not separated by design.} Benchmarks show agents fail on tasks a rule would solve, yet frameworks let an agent own the whole task.
@@ -190,7 +190,7 @@ The reviewed literature gives a mature account of how a single model reasons and
 n9n addresses the first four gaps with an implemented substrate, and the last two with a specified design and an evaluation plan.
 
 \section{Proposed System: n9n}
-n9n is a visual workflow automation platform organised in three layers (Fig.~\ref{fig:arch}). The \emph{deterministic substrate} stores, validates, versions and executes workflows and is implemented. The \emph{agentic layer} adds model-driven construction and diagnosis of workflows and, as a later step, agent nodes inside them; it is specified in the project's platform plan and gated behind configuration. The \emph{SEO layer} is an application of both: technical checks are ordinary deterministic nodes, and content assessment is an agent node.
+n9n is a visual workflow automation platform organised in three layers (Fig.~\ref{fig:arch}). The \emph{deterministic substrate} stores, validates, versions and executes workflows and is implemented. The \emph{agentic layer} adds model-driven construction and diagnosis of workflows and, as a later step, agent nodes inside them; the builder and the explainer are specified in the project's platform plan (Phase 8) and gated behind configuration, while the agent node is proposed in this paper and is not yet in the plan. The \emph{SEO layer} is an application of both: technical checks are ordinary deterministic nodes, and content assessment is an agent node.
 
 \begin{figure}[!htbp]
 \centering
@@ -206,7 +206,7 @@ n9n is a visual workflow automation platform organised in three layers (Fig.~\re
 \node[box, minimum width=66mm, below=5mm of nginx, fill=gray!8] (api) {Go API: accounts, drafts, validation, immutable versions,\\run queue, leases, replay planning, credentials (encrypted), attempts};
 \node[box, minimum width=30mm, below left=5mm and -14mm of api] (pg) {PostgreSQL 16\\12 tables, 6 migrations};
 \node[box, minimum width=30mm, below right=5mm and -14mm of api] (runner) {Rust worker: claim, heartbeat,\\DAG walk, retries, 256 KiB cap};
-\node[box, minimum width=66mm, anchor=north, fill=yellow!10] at ($(pg.south)!0.5!(runner.south)+(0,-7mm)$) (ai) {Agentic layer (specified): Claude client, prompt-to-workflow builder with\\validate-and-repair, failure explainer with code-enforced retry rule, agent node};
+\node[box, minimum width=66mm, anchor=north, fill=yellow!10] at ($(pg.south)!0.5!(runner.south)+(0,-7mm)$) (ai) {Agentic layer: Claude client, prompt-to-workflow builder with validate-and-repair,\\failure explainer with code-enforced retry rule (specified); agent node (proposed)};
 \node[box, minimum width=66mm, below=3mm of ai, fill=green!8] (seo) {SEO layer: technical audit workflows (HTTP, condition, set fields, email)\\+ content assessment by agent node};
 \draw[arr] (web) -- (nginx); \draw[arr] (mob) -- (nginx); \draw[arr] (hook) -- (nginx);
 \draw[arr] (nginx) -- (api);
@@ -221,19 +221,19 @@ n9n is a visual workflow automation platform organised in three layers (Fig.~\re
 
 \subsection{Deterministic Substrate}
 \subsubsection{Workflow model}
-A workflow is a directed acyclic graph of typed nodes. Publishing validates that the graph has exactly one trigger, that every action has at most one incoming edge, that every node is reachable from the trigger, that there is no cycle, and that every configuration field and \texttt{\{\{input.x\}\}} or \texttt{\{\{nodes.ID.x\}\}} mapping refers to a node that is an ancestor. The node catalogue (version 2) has eight types: manual, webhook, schedule and Gmail triggers; set-fields, HTTP request, condition and send-email actions. Only \texttt{condition} has \texttt{true} and \texttt{false} output ports. Publishing snapshots the graph as an immutable numbered version; a draft edit never changes a queued or running job. A draft can also be executed as a \emph{test} run against a snapshot stored on the run record without publishing.
+A workflow is a directed acyclic graph of typed nodes. Publishing validates that the graph has exactly one trigger, that every action has at most one incoming edge, that every node is reachable from the trigger, that there is no cycle, and that every \texttt{\{\{nodes.ID.x\}\}} mapping refers to an ancestor node. The node catalogue (version 2) has eight types: manual, webhook, schedule and Gmail triggers; set-fields, HTTP request, condition and send-email actions. Only \texttt{condition} has \texttt{true} and \texttt{false} output ports. Publishing snapshots the graph as an immutable numbered version; a draft edit never changes a queued or running job. A draft can also be executed as a \emph{test} run against a snapshot stored on the run record without publishing.
 
 \subsubsection{Durable queue and leases}
 Runs are rows in PostgreSQL. A worker claims the oldest queued run with a row lock and \texttt{SKIP LOCKED}, so several workers can share one database, and receives a 60-second lease that it extends every 10 seconds by heartbeat. Every step reports its status, input, output, branch, attempt number and timing to the API, so the database holds the full execution trace. If a lease expires, the next claim examines the steps that were running or failed: if any belongs to a send-email node, or to an HTTP node whose method is not GET or HEAD and that has no idempotency key, the run is marked \emph{uncertain} with the reason recorded; otherwise it is re-queued and resumed, reusing every step that already succeeded. A cancelled run fences the old lease so a late worker cannot write to it.
 
 \subsubsection{Attempts, limits and isolation}
-GET, HEAD and idempotent HTTP requests are retried up to three times on a 5xx response or transport failure; every request, including retries, is recorded as an attempt with status, error and duration, scoped to the execution attempt of its step. Redirects are not followed, so a 301 is reported as such. Destinations must resolve to public addresses unless the operator allows private ones. Step outputs are capped at 256 KiB, JSON nesting at 32 levels and public requests at 1 MiB. Gmail secrets are encrypted at rest with a server-side key and are never returned to clients. Browser sessions use an HttpOnly cookie; mobile clients use revocable bearer tokens; webhook events are deduplicated by event identifier with tombstones that survive run retention.
+GET, HEAD and idempotent HTTP requests are attempted up to three times (two retries) on a 5xx response or transport failure; every request, including retries, is recorded as an attempt with status, error and duration, scoped to the execution attempt of its step. Redirects are not followed, so a 301 is reported as such. Destinations must resolve to public addresses unless the operator allows private ones. Step outputs are capped at 256 KiB, JSON nesting at 32 levels and public requests at 1 MiB. Gmail secrets are encrypted at rest with a server-side key and are never returned to clients. Browser sessions use an HttpOnly cookie; mobile clients use revocable bearer tokens; webhook events are deduplicated by event identifier with tombstones that survive run retention.
 
 \subsubsection{Replay}
 A finished run can be replayed from any node, with an optional input override, against its original graph or the current draft. The API walks the graph from the trigger the way the worker will: conditions on the path to the chosen node are forced onto that path, other conditions keep their recorded branch, and only reached nodes that succeeded in the parent are copied as succeeded steps. A node that never completed in the parent is rejected rather than silently re-sent. The replay is a new run of kind \texttt{replay} linked to its parent, so the lineage is queryable.
 
 \subsection{Agentic Layer}
-The platform plan specifies the agentic layer in detail; it is summarised here because the evaluation plan in Section~X depends on it. All model calls go through one client in the Go API, are off unless an API key is configured, are rate-limited per user (30 requests per hour by default), and are logged with token counts. Workflow graphs may be sent to the model; run inputs and outputs are sent only if the operator enables it and the user confirms per request; credential values, webhook secrets and HTTP header values are redacted before any prompt is built, and a unit test fails if a known secret appears in an outgoing request.
+The platform plan specifies the agentic layer in detail; it is summarised here because the evaluation plan in Section~X depends on it. All model calls would go through one client in the Go API, be off unless an API key is configured, be rate-limited per user (30 requests per hour by default), and be logged with token counts. Workflow graphs may be sent to the model; run inputs and outputs would be sent only if the operator enables it and the user confirms per request; credential values, webhook secrets and HTTP header values would be redacted before any prompt is built, with a unit test that fails if a known secret appears in an outgoing request.
 
 \subsubsection{Prompt-to-workflow builder}
 Given a sentence, the model receives the node catalogue with its schemas, the user's credential names and the mapping syntax, and returns a graph in the draft format. The API runs the same publish validator on the proposal; on failure it returns the errors to the model and asks for a corrected graph, up to three rounds. Only a validated graph reaches the editor, as an unsaved draft the user can test before publishing. This is Plan-and-Solve with a code validator in place of the model's own judgement.
@@ -242,7 +242,7 @@ Given a sentence, the model receives the node catalogue with its schemas, the us
 For a failed or uncertain run, the model receives the graph snapshot, the failing step, prior steps subject to the data policy, the recorded attempts and the documentation of the node types involved, and returns a summary, a likely cause, a \texttt{safe\_to\_retry} verdict and an optional graph patch. The verdict is overridden in code to \emph{no} for any uncertain run whose unsafe node lacks an idempotency key. A proposed fix can be applied to the draft or tested through replay-against-draft with the failed run's input, so the user sees it work before publishing. This is a single, human-reviewed Reflexion step.
 
 \subsubsection{Agent node}
-An agent node, planned after the builder and explainer, would execute a ReAct loop whose tools are the existing node actions, with its reasoning trace stored as the step's output and its tool calls recorded as attempts. Because it may call side-effecting tools, it is classified unsafe for lease recovery, like send-email.
+An agent node, proposed here as the step after the builder and explainer and not yet part of the platform plan, would execute a ReAct loop whose tools are the existing node actions, with its reasoning trace stored as the step's output and its tool calls recorded as attempts. Because it may call side-effecting tools, it is classified unsafe for lease recovery, like send-email.
 
 \subsection{SEO Layer}
 Technical SEO auditing decomposes into checks that have exact answers: a page is reachable or not, returns 200 or not, redirects or not, has a title tag or not, and serves \texttt{robots.txt} and a sitemap or not. Fig.~\ref{fig:seo} shows the audit workflow used in Section~VIII, built from existing nodes only: a webhook trigger receives a URL, an HTTP node fetches it, a condition on the body separates pages without a title, and set-fields nodes record a verdict; a page that is unreachable or answers with a non-2xx status fails the fetch step, and the status is read from the recorded attempt. Because the HTTP node records attempts, a page that fails twice and then succeeds is reported with three attempts rather than as a failure, and a redirect is reported as its status code rather than silently followed. Content assessment (relevance to a target query, intent match, readability, and the GEO-style visibility strategies of \cite{aggarwal2024geo}) is where an agent node is used, after the deterministic checks pass, so that a model never decides whether a page exists.
@@ -278,14 +278,14 @@ Table~\ref{tab:map} maps each n9n component to the work it draws on and states h
 \toprule
 \textbf{Component} & \textbf{Basis} & \textbf{How n9n extends it} \\
 \midrule
-Agent node & ReAct, Toolformer & Trace and tool calls stored as step output and attempts; node is unsafe for lease recovery \\
+Agent node (proposed) & ReAct, Toolformer & Trace and tool calls stored as step output and attempts; node is unsafe for lease recovery \\
 Builder & Plan-and-Solve, Gorilla, HuggingGPT & Plan is a graph validated by the publish validator; up to three repair rounds \\
 Explainer & Reflexion & One reflection, human reviewed; retry verdict enforced in code \\
 Approval node & AutoGen & Pause persists in the database, not in process memory; email or push decision \\
 Code node & CodeAct & WebAssembly sandbox, no capabilities, fuel and memory limits, off by default \\
 Versions & Voyager & Immutable, numbered; a draft edit cannot alter a running job \\
 Replay & LangGraph & From any node, with input override, reusing recorded upstream outputs \\
-Uncertain state & -- (gap) & Interrupted non-idempotent step is surfaced, never retried automatically \\
+Uncertain state & none (gap) & Interrupted non-idempotent step is surfaced, never retried automatically \\
 Graph restrictions & n8n & One trigger, one input per action, no cycles, validated at publish \\
 Reliability metric & $\tau$-bench & pass\^{}k planned for agentic components \\
 SEO audit & GEO & Deterministic technical checks precede model content assessment \\
@@ -296,11 +296,11 @@ SEO audit & GEO & Deterministic technical checks precede model content assessmen
 This section documents what exists and measures it. It covers the deterministic substrate only; no model was called in any experiment, and nothing in this section is a claim about the quality of agentic decisions.
 
 \subsection{Implementation Status}
-Table~\ref{tab:impl} summarises the repository at the evaluated commit. The Go API, Rust worker, Flutter web editor and React Native mobile application are implemented and covered by executed tests; the agentic layer exists as a feature flag, a plan and the \texttt{GET /api/features} endpoint that reports it disabled. The test counts are of test functions found in the source and executed for this paper: the Go suite ran against a disposable PostgreSQL 16 database with the race detector, and the Rust suite ran under \texttt{cargo test}; both passed with no failures. The Flutter, mobile and browser suites were not re-executed for this paper and their counts are from source inspection only.
+Table~\ref{tab:impl} summarises the repository at commit \texttt{bcc035d}. The Go API, Rust worker, Flutter web editor and React Native mobile application are implemented and covered by executed tests; the agentic layer exists as a feature flag, a plan and the \texttt{GET /api/features} endpoint that reports it disabled. The test counts are of test functions found in the source and executed for this paper: the Go suite ran against a disposable PostgreSQL 16 database with the race detector, and the Rust suite ran under \texttt{cargo test}; both passed with no failures, and the logs are kept with the experiment data. The Flutter, mobile and browser suites were not re-executed for this paper and their counts are from source inspection only.
 
 \begin{table}[!htbp]
 \centering
-\caption{Implementation Inventory at the Evaluated Commit}
+\caption{Implementation Inventory at Commit bcc035d}
 \label{tab:impl}
 \scriptsize
 \begin{tabular}{L{2.4cm} r r L{2.3cm}}
@@ -311,22 +311,22 @@ Go API (backend) & 2\,641 & 34 & Yes, all passed (35.8 s) \\
 Rust worker (runner) & 1\,509 & 25 & Yes, all passed \\
 Flutter web editor & 3\,876 & 15 & No \\
 React Native mobile & 1\,027 & 6 & No \\
-Browser (Playwright) & -- & 6 & No \\
-Python API smokes & -- & 4 & No \\
-OpenAPI contract & 436 & -- & -- \\
+Browser (Playwright) & n/a & 6 & No \\
+Python API smokes & n/a & 4 & No \\
+OpenAPI contract & 436 & n/a & n/a \\
 \midrule
 PostgreSQL schema & 12 tables & 6 migr. & applied at start \\
 Node catalogue & 8 types & v2 & reported by API \\
-Commits & 55 & -- & 2026-09-24 to 2026-10-23 \\
+Commits & 55 & n/a & 2026-09-24 to 2026-10-23 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{Experimental Setup}
-All measurements were taken on one machine (Apple M4, 10 cores, 16~GB, macOS 27.0.1) on 2026-10-23. PostgreSQL 16 ran in Docker; the Go API (\texttt{go1.26}) and the Rust worker (release build, \texttt{cargo 1.99}) ran as native processes against a database created for the experiments, so the measurements include real network round trips between worker, API and database but not container overhead for the application services. The worker polled for jobs every 250~ms (its minimum) unless stated. A local mock web site served the deterministic SEO and fault cases; five public home pages were fetched once each for realism. The harness is a standard-library Python script that drives only the public API, the same surface the clients use; it is kept with the paper sources so that the runs can be repeated.
+All measurements were taken on one machine (Apple M4, 10 cores, 16~GB, macOS 27.0.1) on 2026-10-23. PostgreSQL 16 ran in Docker; the Go API (\texttt{go1.26}) and the Rust worker (release build, \texttt{cargo 1.99}) ran as native processes against a database created for the experiments, so the measurements include real network round trips between worker, API and database but not container overhead for the application services. The worker polled for jobs every 250~ms (its minimum) unless stated, and ran with \texttt{ALLOW\_PRIVATE\_HTTP=true} so that the mock site on the loopback address was reachable; the public-address check of Section~VI-A was therefore disabled for all experiments. A local mock web site served the deterministic SEO and fault cases; five public home pages were fetched once each for realism. The harness is a standard-library Python script that drives only the public API, the same surface the clients use; it is kept with the paper sources so that the runs can be repeated.
 
 \subsection{End-to-End Latency}
-A seven-node branching workflow (trigger, set-fields, two conditions, three set-fields leaves, Fig.~\ref{fig:lat}) was published and run \LATn{} times sequentially with alternating inputs, so both branches of each condition were taken. For each run the harness measured the wall time from the \texttt{POST /run} response to the first poll that observed a terminal status (poll interval 20~ms), and read back the recorded per-step durations. Table~\ref{tab:lat} gives the results. The recorded step time is small: the whole graph executes in a few milliseconds of worker time, so the end-to-end figure is dominated by the worker's poll interval, the five to seven step reports (each an HTTP request from worker to API and an insert) and the client's polling. Every run succeeded and every run recorded a status for each of the seven nodes, including the skipped leaves; an executed node writes a \emph{running} row and then a terminal row, so a run holds 11 or 12 step rows depending on the branch taken.
+A seven-node branching workflow (trigger, set-fields, two conditions, three set-fields leaves, Fig.~\ref{fig:lat}) was published and run \LATn{} times sequentially with alternating inputs, so both branches of each condition were taken. For each run the harness measured the wall time from issuing \texttt{POST /run} to the first poll that observed a terminal status (poll interval 20~ms), and read back the recorded per-step durations. Table~\ref{tab:lat} gives the results. The recorded step time is small: the whole graph executes in a few milliseconds of worker time, so the end-to-end figure is dominated by the worker's poll interval, the 11 or 12 step reports (each an HTTP request from worker to API and an insert) and the client's polling. Every run succeeded and every run recorded a status for each of the seven nodes, including the skipped leaves; an executed node writes a \emph{running} row and then a terminal row, so a run holds 11 or 12 step rows depending on the branch taken.
 
 \begin{figure}[!htbp]
 \centering
@@ -363,7 +363,7 @@ A seven-node branching workflow (trigger, set-fields, two conditions, three set-
 \end{table}
 
 \subsection{Throughput and Worker Concurrency}
-To measure how the queue behaves under a burst, the worker was stopped, \THRn{} runs of the same workflow were queued (\THRenq{} s of API time), and a worker was started with concurrency 1, 4 and 8 in turn. The makespan is taken from the database records, not the client clock: it is the interval from the earliest recorded step start to the latest recorded step finish across the \THRn{} runs, so it measures the worker and API draining the queue. Table~\ref{tab:thr} shows the results. Throughput rises from concurrency 1 to 4 and falls slightly at 8, which is consistent with the single API process and database being the shared resource: each run makes eight to ten step reports plus a claim and a completion call, so the API handles roughly ten requests per run, and more worker tasks only add contention once the API is saturated. All \THRn{} runs succeeded at every level. That no run is claimed by two workers is the property of the \texttt{SKIP LOCKED} claim; it is covered by the backend's concurrent-claim test, which passed in the suite run reported in Table~\ref{tab:impl}, rather than by this experiment.
+To measure how the queue behaves under a burst, the worker was stopped, \THRn{} runs of the same workflow were queued (0.09 to 0.14~s of API time per burst), and a worker was started with concurrency 1, 4 and 8 in turn. The makespan is taken from the database records, not the client clock: it is the interval from the earliest recorded step start to the latest recorded step finish across the \THRn{} runs, so it measures the worker and API draining the queue. Table~\ref{tab:thr} shows the results. Throughput rises from concurrency 1 to 4 and falls slightly at 8, which is consistent with the single API process and database being the shared resource: each run on this input makes 12 step reports plus a claim and a completion call, so the API handles about 14 requests per run, and more worker tasks only add contention once the API is saturated. All \THRn{} runs succeeded at every level. That no run is claimed by two workers is the property of the \texttt{SKIP LOCKED} claim; it is covered by the backend's concurrent-claim test, which passed in the suite run reported in Table~\ref{tab:impl}, rather than by this experiment.
 
 \begin{table}[!htbp]
 \centering
@@ -379,11 +379,11 @@ To measure how the queue behaves under a burst, the worker was stopped, \THRn{} 
 \end{table}
 
 \subsection{Replay from a Chosen Step}
-A nine-node chain (trigger followed by eight set-fields nodes) was run \REPreps{} times; after each run the harness replayed it from its fifth action, the sixth node, with an edited input. Table~\ref{tab:rep} shows that each replay copied \REPcopy{} upstream steps from the parent without executing them (they carry no start time) and executed \REPexec{}, exactly the chosen node and its three descendants, and that the replay's wall time is correspondingly lower than the full run's. Every replay recorded kind \texttt{replay} and the parent's identifier, and the replayed node received the overridden input.
+A nine-node chain (trigger followed by eight set-fields nodes) was run \REPreps{} times; after each run the harness replayed it from its fifth action, the sixth node, with an edited input. Table~\ref{tab:rep} shows that each replay copied \REPcopy{} upstream steps from the parent without executing them (they carry no start time) and executed \REPexec{}, exactly the chosen node and its three descendants, and that the replay's wall time is correspondingly lower than the full run's. Every replay recorded kind \texttt{replay} and the parent's identifier; that the override reaches the replayed node is covered by the backend's replay tests rather than by this experiment.
 
 \begin{table}[!htbp]
 \centering
-\caption{Replay of a Nine-Node Chain from Its Sixth Node (\REPreps{} Repetitions)}
+\caption{Replay of a Nine-Node Chain from Its Sixth Node (\REPreps{} Repetitions; Full-Run Step Counts Hold by Construction, Replay Counts Were Identical in Every Repetition)}
 \label{tab:rep}
 \small
 \begin{tabular}{L{3.6cm} r r}
@@ -395,7 +395,7 @@ A nine-node chain (trigger followed by eight set-fields nodes) was run \REPreps{
 \end{table}
 
 \subsection{Technical SEO Audit Workflow}
-The workflow of Fig.~\ref{fig:seo}, in its final form (a webhook trigger, an HTTP fetch with a declared user agent, a title condition and two verdict nodes), was activated and invoked once per target through the webhook endpoint. Table~\ref{tab:seo} lists each target, the HTTP status seen by the fetch node, the number of attempts the substrate recorded, and the verdict. Three behaviours of the substrate shape the results. First, the HTTP node treats any non-2xx response as a failed step, so a 404 or a 301 ends the run as \emph{failed} with the status in the step error and in the attempt record; the audit therefore reads the status from the attempt rather than from a condition, and the first version of the workflow, which branched on the status code, was simplified accordingly. Second, redirects are not followed, so a moved page is reported as 301 rather than as the page it points to, which is the correct behaviour for an audit. Third, the flaky target, which answers 500 twice and then 200, is reported as a pass with three recorded attempts, which distinguishes an unstable server from a broken page without any workflow logic. The \texttt{robots.txt} and sitemap targets are reachable but are not HTML, so the title rule reports them as missing a title; a real audit needs a second condition on the response's content type before the title check, which the existing nodes can express. Among the public pages, three passed; one answered 301 to the request as sent, which is a finding about that site's canonical host rather than an error of the platform; and one home page exceeded the HTTP node's 256~KiB response cap, so its fetch failed with that reason recorded, a limit discussed below.
+The workflow of Fig.~\ref{fig:seo}, in its final form (a webhook trigger, an HTTP fetch with a declared user agent, a title condition and two verdict nodes), was activated and invoked once per target through the webhook endpoint. Table~\ref{tab:seo} lists each target, the HTTP status seen by the fetch node, the number of attempts the substrate recorded, and the verdict. Three behaviours of the substrate shape the results. First, the HTTP node treats any non-2xx response as a failed step, so a 404 or a 301 ends the run as \emph{failed} with the status in the step error and in the attempt record; the audit therefore reads the status from the attempt rather than from a condition. Second, redirects are not followed, so a moved page is reported as 301 rather than as the page it points to, which is the correct behaviour for an audit. Third, the flaky target, which answers 500 twice and then 200, is reported as a pass with three recorded attempts, which distinguishes an unstable server from a broken page without any workflow logic. The \texttt{robots.txt} and sitemap targets are reachable but are not HTML, so the title rule reports them as missing a title; a real audit needs a second condition on the response's content type before the title check, which the existing nodes can express. Among the public pages, three passed; one answered 301 to the request as sent, which is a finding about that site's canonical host rather than an error of the platform; and one home page exceeded the HTTP node's 256~KiB response cap, so its fetch failed with that reason recorded, a limit discussed below.
 
 \begin{table}[!htbp]
 \centering
@@ -411,7 +411,7 @@ The workflow of Fig.~\ref{fig:seo}, in its final form (a webhook trigger, an HTT
 \end{table}
 
 \subsection{Fault Injection: Worker Killed During a Side Effect}
-The property that most separates n9n from the reviewed frameworks is what happens when a worker dies in the middle of an action. Three single-action workflows were run against a mock endpoint that answers after eight seconds; in each case the harness waited until the action's step was recorded as \emph{running}, killed the worker with \texttt{SIGKILL}, and started a fresh worker half a second later. The fresh worker can only claim the run after the 60-second lease expires. Table~\ref{tab:fault} gives the outcome of each case. A GET is idempotent, so the run is re-queued, the step is executed a second time (attempt 2) and the run succeeds. A POST without an idempotency key is not safe to repeat, so the run is marked \emph{uncertain} with the reason recorded and is never retried by the platform. A POST with an idempotency key is re-queued and succeeds like the GET. The uncertain verdict was recorded \FAULTrecover{} s after the lease expired, at the fresh worker's next claim; the two recoverable runs finished about eight seconds later still, the time taken to execute the slow call a second time. Recovery time is therefore the lease length plus the action's own duration.
+The property that most separates n9n from the reviewed frameworks is what happens when a worker dies in the middle of an action. Three single-action workflows were run against a mock endpoint that answers after eight seconds; in each case the harness waited until the action's step was recorded as \emph{running}, killed the worker with \texttt{SIGKILL}, and started a fresh worker half a second later. The fresh worker can only claim the run after the 60-second lease expires. Table~\ref{tab:fault} gives the outcome of each case. A GET is idempotent, so the run is re-queued, the step is executed a second time (attempt 2) and the run succeeds. A POST without an idempotency key is not safe to repeat, so the run is marked \emph{uncertain} with the reason recorded and is never retried by the platform. A POST with an idempotency key is re-queued and succeeds like the GET. The uncertain verdict was recorded within about half a second of the lease expiring, a bound set by the fresh worker's 250~ms claim poll and the harness's 250~ms status poll rather than by a timestamp; the two recoverable runs finished about eight seconds later still, the time taken to execute the slow call a second time. Recovery time is therefore the lease length plus the action's own duration.
 
 \begin{table}[!htbp]
 \centering
@@ -436,7 +436,7 @@ The measurements also expose limits. Throughput is bounded by the single API pro
 \item \textbf{Single machine, single trial per configuration.} Latency and replay figures come from \LATn{} and \REPreps{} repetitions on one laptop; throughput and fault cases were run once per configuration. No confidence intervals are reported, and the absolute numbers will differ on other hardware and under container networking.
 \item \textbf{Synthetic workflows.} The graphs contain set-fields and condition nodes whose work is trivial, so the measurements characterise the engine, not realistic action latency. The SEO targets were a local mock and five public pages fetched once.
 \item \textbf{The SEO layer is a workflow, not a product.} The audit shows that technical checks can be expressed and recorded with the existing nodes; it does not implement crawling, scoring, or the content assessment that the agent node is meant to provide.
-\item \textbf{Review coverage.} Twenty-two works were selected by relevance, not by a systematic search; venues were cited from the arXiv record where the publisher page was not checked.
+\item \textbf{Review coverage.} Twenty-four works were selected by relevance, not by a systematic search; venues were cited from the arXiv record where the publisher page was not checked.
 \item \textbf{Not checked.} Multi-replica operation, the Flutter and mobile test suites, the Gmail trigger path, and behaviour under database failover were not exercised for this paper.
 \end{enumerate}
 
