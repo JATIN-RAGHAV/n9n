@@ -40,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && mkdir -p /tmp/n9n-health && chown n9n:n9n /tmp/n9n-health
 COPY --from=backend-build /n9n-backend /usr/local/bin/n9n-backend
 COPY --from=runner-build /n9n-runner /usr/local/bin/n9n-runner
-COPY --chmod=755 cloudflare/entrypoint.sh /usr/local/bin/n9n-entrypoint
+COPY --chmod=755 cloudflare/container/entrypoint.sh /usr/local/bin/n9n-entrypoint
 USER n9n
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/n9n-entrypoint"]
