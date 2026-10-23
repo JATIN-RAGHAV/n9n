@@ -1,6 +1,5 @@
 # Local `wrangler dev` secrets. Copy to .dev.vars (gitignored).
-# The container reaches the Compose database through host.docker.internal.
-DATABASE_URL=postgres://n9n:n9n_local_dev@host.docker.internal:55432/n9n?sslmode=disable
+# The database comes from CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE, not from here.
 ENCRYPTION_KEY=replace-with-64-hex-characters
 RUNNER_TOKEN=replace-with-random-token
 COOKIE_SECURE=false

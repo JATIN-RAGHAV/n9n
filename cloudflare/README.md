@@ -1,62 +1,78 @@
-# n9n on Cloudflare (Workers + Containers)
+# n9n on Cloudflare (Workers free plan)
 
-_Last updated: 2026-10-23 16:48 IST · Claude Opus 5.5 (claude-opus-5-5)_
+_Last updated: 2026-10-23 17:24 IST · Claude Opus 5.5 (claude-opus-5-5)_
 
-This folder deploys the whole n9n stack to Cloudflare with Wrangler:
+This folder deploys n9n to `https://n9n.walrus.codes` as one Cloudflare Worker on the **free plan**:
 
 | Piece | Where it runs | Notes |
 | --- | --- | --- |
-| Flutter web app | Workers static assets (edge cache) | `web/build/web`, SPA fallback, COOP/COEP headers from `_headers` |
-| Worker (`src/index.ts`) | Every Cloudflare location | Serves `/healthz`, blocks `/internal*`, proxies `/api/*` to the container |
-| Go API + Rust runner | One Cloudflare Container (`Dockerfile`) | Both processes in one `lite` instance, supervised by `entrypoint.sh` |
-| PostgreSQL | **Not on Cloudflare** | Any reachable PostgreSQL 16+ (Supabase, Neon, RDS, your own). Set `DATABASE_URL`. |
+| Flutter web app | Workers static assets | `web/build/web`, SPA fallback, COOP/COEP headers from `_headers` |
+| API | The Worker (`src/api/`) | TypeScript port of `backend/`, same routes, SQL, schema and data formats |
+| PostgreSQL | Supabase, reached through Hyperdrive | Free plan: 100,000 queries a day |
+| Rust runner | **Not on Cloudflare yet** | Connects to `https://n9n.walrus.codes/internal/*` with `RUNNER_TOKEN` from any host |
 
-Containers need the **Workers Paid plan** (USD 5/month, includes 25 GiB-hours, 375 vCPU-minutes and 200 GB-hours of container usage). A `lite` instance kept warm all month uses about 180 GiB-hours, so expect a few dollars on top of the plan.
+Until a runner is connected, workflows can be built, saved and published, webhooks are accepted and runs are queued, but no run executes.
+
+## The two API implementations
+
+`backend/` (Go) and `cloudflare/src/api/` (TypeScript) are the same API. Either can serve the same database, and both must change together. Three checks hold them together, all run by the `worker-api` CI job:
+
+- `scripts/check_api_sync.py` fails if the migration lists differ by one statement.
+- `tests/e2e_smoke.py`, `mobile_api_smoke.py` and `replay_smoke.py` run against the Worker with the Rust runner attached.
+- `tests/api_parity.py` runs both servers on one database: accounts and sessions cross over, catalog, workflows and runs read back identically, and 14 bad requests fail with the same status and message.
+
+Formats both sides share: 32-hex IDs, `2006-01-02T15:04:05.000000000Z` timestamps, SHA-256 session hashes, AES-256-GCM credentials (`base64(nonce||ciphertext||tag)`), and PBKDF2-SHA256 password hashes (`pbkdf2_sha256$<iterations>$<salt>$<hash>`, bcrypt still verifies).
+
+Known differences, by design:
+
+| Area | Go | Worker |
+| --- | --- | --- |
+| Schema migration | At startup | On the first request in each isolate, under the same advisory lock |
+| Login throttle (20 per IP per minute) | In-process | Rate limiting binding, counted per Cloudflare location |
+| Client IP | `X-Real-IP` from nginx | `CF-Connecting-IP` |
+| `/internal/*` | Blocked at nginx, private network only | Public, protected only by the `RUNNER_TOKEN` bearer token |
+| Hourly cleanup | Goroutine | Cron Trigger `17 * * * *` |
+| Timestamps | Nanoseconds | Milliseconds plus a per-isolate counter in the last six digits |
 
 ## Deploy
 
-Requirements: Node 20+, Docker running (Wrangler builds the image locally), Flutter (same version as `web/` expects).
+Requirements: Node 20+, Flutter, and `npm run login` done once with the personal Cloudflare account. All Wrangler commands go through `./wrangler.sh`, which keeps this project's login in `~/.config/n9n-cf`.
 
-All Wrangler commands go through `./wrangler.sh`, which keeps this project's Cloudflare login in its own config home (`~/.config/n9n-cf`) so it never touches the login other projects use on this machine. Log in once with `npm run login`.
+1. Create the Hyperdrive configuration from the Supabase **session pooler** URL, with caching off. The API must never read a cached session or run row:
+   ```sh
+   ./wrangler.sh hyperdrive create n9n-db --caching-disabled --connection-string="$DATABASE_URL"
+   ```
+   Put the printed ID into `hyperdrive[0].id` in `wrangler.jsonc`.
+2. Set the two secrets (64 hex characters each; never change `ENCRYPTION_KEY` after the first deploy):
+   ```sh
+   ./wrangler.sh secret put ENCRYPTION_KEY
+   ./wrangler.sh secret put RUNNER_TOKEN
+   ```
+3. Deploy: `npm run deploy`. It builds the web app and publishes the Worker on `n9n.walrus.codes`.
 
-```sh
-cd cloudflare
-npm install
-./wrangler.sh secret put DATABASE_URL      # postgres://user:pass@host:5432/db?sslmode=require
-./wrangler.sh secret put ENCRYPTION_KEY    # openssl rand -hex 32 ; never rotate after first use
-./wrangler.sh secret put RUNNER_TOKEN      # openssl rand -hex 32
-npm run deploy                            # builds web, builds the image, pushes everything
-```
-
-`ALLOWED_ORIGIN` and `GOOGLE_REDIRECT_URI` in the `vars` block already point at `https://n9n.walrus.codes`; change them if the hostname changes. Gmail also needs `GOOGLE_CLIENT_ID` (var) and `GOOGLE_CLIENT_SECRET` (`wrangler secret put`).
-
-The Worker is bound to the custom domain `n9n.walrus.codes` (`routes` in `wrangler.jsonc`); Wrangler creates the DNS record and certificate on deploy. Check: `https://n9n.walrus.codes/healthz` (Worker) and `/api/health` (container). The first API call after a deploy takes 10–30 s while the container boots and the API runs migrations.
+Check `https://n9n.walrus.codes/healthz` (Worker) and `/api/health` (API).
 
 ## Continuous deployment
 
-`.github/workflows/deploy-cloudflare.yml` deploys automatically when the `CI` workflow succeeds on `main`, and can be run by hand from the Actions tab. It builds the web app, then runs `wrangler deploy --secrets-file`, so the runtime secrets go from GitHub to Cloudflare on every deploy, and finally checks `/healthz` and `/api/health` on the live site.
+`.github/workflows/deploy-cloudflare.yml` deploys when `CI` succeeds on `main`, or by hand from the Actions tab. Repository secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `ENCRYPTION_KEY`, `RUNNER_TOKEN`, optionally `GOOGLE_CLIENT_SECRET`. The database URL is not a GitHub secret; it lives in the Hyperdrive configuration.
 
-Add these repository secrets under Settings, Secrets and variables, Actions: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `DATABASE_URL`, `ENCRYPTION_KEY`, `RUNNER_TOKEN`, and optionally `GOOGLE_CLIENT_SECRET`. The job runs in the `production` environment, so you can add a required reviewer there if you want to approve each deploy.
-
-## How requests flow
-
-1. A browser loads `/`: static assets, served from the edge, no Worker, no container.
-2. The app calls `/api/...`: the Worker adds `X-Forwarded-Host`, `X-Forwarded-Proto` and `X-Real-IP` (from `CF-Connecting-IP`) and forwards to the container's port 8080 via the `N9N` Durable Object binding. The backend's origin check and per-IP login throttle rely on those headers.
-3. Inside the container `entrypoint.sh` starts `n9n-backend`, waits for port 8080, then starts `n9n-runner` with `BACKEND_URL=http://127.0.0.1:8080`. If either process exits the container exits and is recreated on the next request.
-4. A cron trigger (`*/5 * * * *`) calls `/api/health` so the container never reaches its 20 minute `sleepAfter`; schedule and Gmail triggers therefore keep polling. Remove the cron to let it scale to zero when nobody uses it (triggers then pause too).
-
-## Local test
+## Local development
 
 ```sh
-docker compose up -d --wait postgres          # from the repo root
-cp cloudflare/.dev.vars.example cloudflare/.dev.vars   # paste ENCRYPTION_KEY and RUNNER_TOKEN from .env
-cd cloudflare && npm run build:web && npm run dev
-python3 ../tests/e2e_smoke.py --base http://localhost:8787
+docker compose up -d --wait postgres
+cp cloudflare/.dev.vars.example cloudflare/.dev.vars    # fill ENCRYPTION_KEY and RUNNER_TOKEN
+cd cloudflare && npm run build:web
+CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE='postgres://n9n:n9n_local_dev@127.0.0.1:55432/n9n?sslmode=disable' npm run dev
+# in another terminal, attach a runner to the Worker:
+BACKEND_URL=http://localhost:8787 RUNNER_TOKEN=... runner/target/release/n9n-runner
 ```
 
-## Known limits
+## Free-plan limits to watch
 
-- One container instance (`max_instances: 1`). Multiple instances would work (the backend uses `SKIP LOCKED` claims) but each would run its own runner; raise it only with a load-balancing strategy in `src/index.ts`.
-- Cloudflare can stop a container at any time (host maintenance, deploys). A run interrupted mid side-effect becomes `uncertain`, as documented in `backend/README.md`.
-- The image must be `linux/amd64`; the Dockerfile cross-compiles from Apple Silicon, so no emulation is needed for the build.
-- Egress from the container to PostgreSQL and HTTP nodes is billed at Cloudflare's container egress rates.
+- **CPU: 10 ms per request.** Registration and login run 100,000 PBKDF2 iterations, which can exceed it. Cloudflare tolerates occasional overruns. If logins fail with "exceeded CPU", lower `PASSWORD_PBKDF2_ITERATIONS` (minimum 10,000) or move to Workers Paid. Not yet measured on the live Worker.
+- **100,000 requests and 100,000 database queries a day.** A runner polling every second uses about 86,400 claim requests a day on its own; set `RUNNER_POLL_MS` to 5000 or more when the runner is attached.
+- **5 Cron Triggers per account**; this Worker uses one.
+
+## Paid-plan alternative
+
+`container/` holds the image that runs the Go API and the Rust runner together in a Cloudflare Container (Workers Paid only). It is kept for a future runner host; the free deployment does not use it.

@@ -1,6 +1,6 @@
 # n9n — agent rules
 
-_Last updated: 2026-10-23 14:26 IST · Claude Fable 5.1 (claude-fable-5-1)_
+_Last updated: 2026-10-23 17:24 IST · Claude Opus 5.5 (claude-opus-5-5)_
 
 ## This is a personal project
 
@@ -25,8 +25,25 @@ private stuff and not related to the company."
 | `runner/` | Rust worker that executes runs |
 | `web/` | Flutter web editor |
 | `mobile/` | React Native (Expo) app |
-| `cloudflare/` | Production deployment: Worker + Container via Wrangler, see `cloudflare/README.md` |
+| `cloudflare/` | Production deployment on the Workers free plan; `cloudflare/src/api/` is the TypeScript port of `backend/`. See `cloudflare/README.md` |
 | `docs/`, `contracts/`, `tests/` | Architecture notes, API contract, smoke and browser tests |
+
+## Two API implementations, kept in sync
+
+`backend/` (Go) and `cloudflare/src/api/` (TypeScript Worker) are one API in two languages.
+Owner's words (2026-10-23): "don't remove go code from the repo. just make sure that you will have
+the go and the TS code both there. and on subsequent changes they should be make sure that they are
+in sync."
+
+- Every change to API behaviour lands in both, in the same pull request: routes, validation,
+  error messages, SQL, response shapes, and data formats (IDs, timestamps, password hashes,
+  credential encryption).
+- A new schema migration is appended to both lists verbatim; `python3 scripts/check_api_sync.py`
+  fails otherwise.
+- Before handing back an API change, run the smoke tests against both servers and
+  `tests/api_parity.py`. When a difference is intended, list it in the table in `cloudflare/README.md`.
+- Enforcement: Automated for the schema, the smoke tests and the parity cases (CI job
+  `worker-api`); instruction only for everything the parity cases do not exercise.
 
 ## Working rules
 

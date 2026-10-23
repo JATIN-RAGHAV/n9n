@@ -5,10 +5,11 @@ name: Deploy to Cloudflare
 #   CLOUDFLARE_API_TOKEN   token from the personal Cloudflare account with
 #                          "Edit Cloudflare Workers" + Containers + Workers Routes/Custom Domains (zone walrus.codes)
 #   CLOUDFLARE_ACCOUNT_ID  c56108842624423a9796253cf8d9300a
-#   DATABASE_URL           Supabase session pooler URL (port 5432, ?sslmode=require)
 #   ENCRYPTION_KEY         64 hex chars; never change it after the first deploy
 #   RUNNER_TOKEN           64 hex chars
 # Optional: GOOGLE_CLIENT_SECRET (for Gmail nodes).
+# The database URL is not a GitHub secret: it lives in the Hyperdrive
+# configuration named in cloudflare/wrangler.jsonc.
 
 on:
   workflow_run:
@@ -55,17 +56,16 @@ jobs:
 
       - name: Write secrets file
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           RUNNER_TOKEN: ${{ secrets.RUNNER_TOKEN }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         run: |
           umask 077
-          jq -n '{DATABASE_URL: env.DATABASE_URL, ENCRYPTION_KEY: env.ENCRYPTION_KEY, RUNNER_TOKEN: env.RUNNER_TOKEN}
+          jq -n '{ENCRYPTION_KEY: env.ENCRYPTION_KEY, RUNNER_TOKEN: env.RUNNER_TOKEN}
                  + (if (env.GOOGLE_CLIENT_SECRET // "") != "" then {GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET} else {} end)' \
             > "$RUNNER_TEMP/n9n-secrets.json"
 
-      - name: Deploy (builds the container image and pushes it)
+      - name: Deploy the Worker and the web app
         working-directory: cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

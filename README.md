@@ -96,11 +96,7 @@ Gmail triggers and send-email nodes need a Google OAuth client:
 
 ### Deploy to Cloudflare
 
-`cloudflare/` deploys the stack with Wrangler: the Flutter app as Workers static assets at the edge, the Go API and Rust runner in one Cloudflare Container, and PostgreSQL on any provider you choose. See [cloudflare/README.md](cloudflare/README.md).
-
-```sh
-cd cloudflare && npm install && npm run deploy
-```
+`cloudflare/` deploys n9n on the Cloudflare Workers free plan: the Flutter app as static assets and the API as a TypeScript Worker (a port of `backend/`, kept in sync with it) on Supabase through Hyperdrive. The Rust runner is not hosted there yet. See [cloudflare/README.md](cloudflare/README.md).
 
 ### Mobile app (Android / iOS)
 
