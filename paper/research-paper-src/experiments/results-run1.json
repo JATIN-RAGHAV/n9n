@@ -1,0 +1,593 @@
+{
+  "started_at_utc": "2026-10-23T07:58:34Z",
+  "machine": "arm64",
+  "os": "Darwin 27.0.0",
+  "features": {
+    "features": {
+      "ai": false,
+      "code_node": false
+    }
+  },
+  "catalog_version": 2,
+  "node_types": [
+    "manual_trigger",
+    "webhook_trigger",
+    "schedule_trigger",
+    "email_trigger",
+    "set_fields",
+    "http_request",
+    "condition",
+    "send_email"
+  ],
+  "latency": {
+    "runs": 50,
+    "wall_ms": {
+      "n": 50,
+      "mean": 260.56184249930084,
+      "median": 259.6361250325572,
+      "p95": 290.2070813725004,
+      "min": 228.878750000149,
+      "max": 295.5872919992544,
+      "stdev": 14.81952817695549
+    },
+    "step_sum_ms": {
+      "n": 50,
+      "mean": 6.56,
+      "median": 7.0,
+      "p95": 11.0,
+      "min": 1,
+      "max": 16,
+      "stdev": 3.2505999446256073
+    },
+    "steps_recorded": {
+      "n": 50,
+      "mean": 11.5,
+      "median": 11.5,
+      "p95": 12.0,
+      "min": 11,
+      "max": 12,
+      "stdev": 0.5
+    },
+    "per_node_ms": {
+      "trigger": {
+        "n": 50,
+        "mean": 2.02,
+        "median": 2.0,
+        "p95": 4.0,
+        "min": 1,
+        "max": 7,
+        "stdev": 1.174563748802082
+      },
+      "normalize": {
+        "n": 50,
+        "mean": 1.6,
+        "median": 1.5,
+        "p95": 3.0,
+        "min": 0,
+        "max": 7,
+        "stdev": 1.0954451150103321
+      },
+      "threshold": {
+        "n": 50,
+        "mean": 1.2,
+        "median": 1.0,
+        "p95": 2.0,
+        "min": 0,
+        "max": 3,
+        "stdev": 0.8
+      },
+      "review": {
+        "n": 25,
+        "mean": 0.88,
+        "median": 1,
+        "p95": 2.0,
+        "min": 0,
+        "max": 2,
+        "stdev": 0.7652450587883597
+      },
+      "known_customer": {
+        "n": 25,
+        "mean": 1.36,
+        "median": 1,
+        "p95": 2.0,
+        "min": 0,
+        "max": 3,
+        "stdev": 0.6858571279792899
+      },
+      "approved": {
+        "n": 17,
+        "mean": 1.3529411764705883,
+        "median": 1,
+        "p95": 2.1999999999999993,
+        "min": 1,
+        "max": 3,
+        "stdev": 0.5882352941176471
+      },
+      "invalid_customer": {
+        "n": 8,
+        "mean": 1,
+        "median": 1.0,
+        "p95": 2.0,
+        "min": 0,
+        "max": 2,
+        "stdev": 0.7071067811865476
+      }
+    },
+    "raw_wall_ms": [
+      295.5872919992544,
+      286.2358340062201,
+      269.02154099661857,
+      255.69937500404194,
+      266.84058300452307,
+      259.01287503074855,
+      252.71516700740904,
+      261.5617089904845,
+      261.4371250383556,
+      271.1324999690987,
+      249.5608750032261,
+      268.54812499368563,
+      243.51537501206622,
+      275.98450001096353,
+      266.9052080018446,
+      258.0517499591224,
+      260.2593750343658,
+      269.90095799556,
+      265.7772499951534,
+      253.1891250400804,
+      233.3277910365723,
+      292.0155409956351,
+      272.3385419812985,
+      256.6647079656832,
+      249.13520796690136,
+      251.62012496730313,
+      246.73499999335036,
+      275.74995905160904,
+      248.08724998729303,
+      265.33462502993643,
+      238.7786660110578,
+      291.98962496593595,
+      234.0369580197148,
+      263.3126250002533,
+      252.41008400917053,
+      267.7317089983262,
+      256.0532920178957,
+      273.1340419850312,
+      244.61875000270084,
+      245.25358295068145,
+      260.92962495749816,
+      270.3361249878071,
+      251.73437496414408,
+      288.0284169805236,
+      228.878750000149,
+      252.7852079947479,
+      264.54120804555714,
+      255.29220898170024,
+      247.9225000133738,
+      258.37908301036805
+    ]
+  },
+  "relogins": 0,
+  "replay": {
+    "chain_nodes": 9,
+    "replay_from": "s5",
+    "reps": 10,
+    "full_wall_ms": {
+      "n": 10,
+      "mean": 281.288954091724,
+      "median": 281.62579095805995,
+      "p95": 308.04227270709816,
+      "min": 258.57175001874566,
+      "max": 315.82091603195295,
+      "stdev": 16.729734440358868
+    },
+    "replay_wall_ms": {
+      "n": 10,
+      "mean": 234.40907079493627,
+      "median": 228.8211249979213,
+      "p95": 256.9447874906473,
+      "min": 215.67637502448633,
+      "max": 263.1472499924712,
+      "stdev": 13.827019132540757
+    },
+    "steps_copied": {
+      "n": 10,
+      "mean": 5,
+      "median": 5.0,
+      "p95": 5.0,
+      "min": 5,
+      "max": 5,
+      "stdev": 0.0
+    },
+    "steps_executed": {
+      "n": 10,
+      "mean": 4,
+      "median": 4.0,
+      "p95": 4.0,
+      "min": 4,
+      "max": 4,
+      "stdev": 0.0
+    }
+  },
+  "seo": [
+    {
+      "kind": "mock",
+      "url": "http://127.0.0.1:18090/ok",
+      "run_status": "succeeded",
+      "fetch_status": "succeeded",
+      "http_status": 200,
+      "fetch_ms": 3,
+      "attempts": [
+        [
+          200,
+          "succeeded",
+          0
+        ]
+      ],
+      "verdict": "pass",
+      "error": "",
+      "skipped": [
+        "no_title"
+      ]
+    },
+    {
+      "kind": "mock",
+      "url": "http://127.0.0.1:18090/notitle",
+      "run_status": "succeeded",
+      "fetch_status": "succeeded",
+      "http_status": 200,
+      "fetch_ms": 3,
+      "attempts": [
+        [
+          200,
+          "succeeded",
+          0
+        ]
+      ],
+      "verdict": "missing_title",
+      "error": "",
+      "skipped": [
+        "pass"
+      ]
+    },
+    {
+      "kind": "mock",
+      "url": "http://127.0.0.1:18090/missing",
+      "run_status": "failed",
+      "fetch_status": "failed",
+      "http_status": null,
+      "fetch_ms": 3,
+      "attempts": [
+        [
+          404,
+          "failed",
+          0
+        ]
+      ],
+      "verdict": "fetch_failed",
+      "error": "HTTP 404 Not Found: <html><title>404</title></html>",
+      "skipped": []
+    },
+    {
+      "kind": "mock",
+      "url": "http://127.0.0.1:18090/moved",
+      "run_status": "failed",
+      "fetch_status": "failed",
+      "http_status": null,
+      "fetch_ms": 4,
+      "attempts": [
+        [
+          301,
+          "failed",
+          1
+        ]
+      ],
+      "verdict": "fetch_failed",
+      "error": "HTTP 301 Moved Permanently: ",
+      "skipped": []
+    },
+    {
+      "kind": "mock",
+      "url": "http://127.0.0.1:18090/flaky/004281",
+      "run_status": "succeeded",
+      "fetch_status": "succeeded",
+      "http_status": 200,
+      "fetch_ms": 763,
+      "attempts": [
+        [
+          500,
+          "failed",
+          0
+        ],
+        [
+          500,
+          "failed",
+          0
+        ],
+        [
+          200,
+          "succeeded",
+          1
+        ]
+      ],
+      "verdict": "missing_title",
+      "error": "",
+      "skipped": [
+        "pass"
+      ]
+    },
+    {
+      "kind": "mock",
+      "url": "http://127.0.0.1:18090/robots.txt",
+      "run_status": "succeeded",
+      "fetch_status": "succeeded",
+      "http_status": 200,
+      "fetch_ms": 5,
+      "attempts": [
+        [
+          200,
+          "succeeded",
+          1
+        ]
+      ],
+      "verdict": "missing_title",
+      "error": "",
+      "skipped": [
+        "pass"
+      ]
+    },
+    {
+      "kind": "mock",
+      "url": "http://127.0.0.1:18090/sitemap.xml",
+      "run_status": "succeeded",
+      "fetch_status": "succeeded",
+      "http_status": 200,
+      "fetch_ms": 4,
+      "attempts": [
+        [
+          200,
+          "succeeded",
+          0
+        ]
+      ],
+      "verdict": "missing_title",
+      "error": "",
+      "skipped": [
+        "pass"
+      ]
+    },
+    {
+      "kind": "public",
+      "url": "https://example.com/",
+      "run_status": "succeeded",
+      "fetch_status": "succeeded",
+      "http_status": 200,
+      "fetch_ms": 66,
+      "attempts": [
+        [
+          200,
+          "succeeded",
+          49
+        ]
+      ],
+      "verdict": "pass",
+      "error": "",
+      "skipped": [
+        "no_title"
+      ]
+    },
+    {
+      "kind": "public",
+      "url": "https://www.iana.org/",
+      "run_status": "succeeded",
+      "fetch_status": "succeeded",
+      "http_status": 200,
+      "fetch_ms": 82,
+      "attempts": [
+        [
+          200,
+          "succeeded",
+          68
+        ]
+      ],
+      "verdict": "pass",
+      "error": "",
+      "skipped": [
+        "no_title"
+      ]
+    },
+    {
+      "kind": "public",
+      "url": "https://www.python.org/",
+      "run_status": "succeeded",
+      "fetch_status": "succeeded",
+      "http_status": 200,
+      "fetch_ms": 117,
+      "attempts": [
+        [
+          200,
+          "succeeded",
+          105
+        ]
+      ],
+      "verdict": "pass",
+      "error": "",
+      "skipped": [
+        "no_title"
+      ]
+    },
+    {
+      "kind": "public",
+      "url": "https://en.wikipedia.org/wiki/Main_Page",
+      "run_status": "failed",
+      "fetch_status": "failed",
+      "http_status": null,
+      "fetch_ms": 315,
+      "attempts": [
+        [
+          200,
+          "failed",
+          304
+        ]
+      ],
+      "verdict": "fetch_failed",
+      "error": "HTTP response too large",
+      "skipped": []
+    },
+    {
+      "kind": "public",
+      "url": "https://www.rust-lang.org/",
+      "run_status": "failed",
+      "fetch_status": "failed",
+      "http_status": null,
+      "fetch_ms": 56,
+      "attempts": [
+        [
+          301,
+          "failed",
+          39
+        ]
+      ],
+      "verdict": "fetch_failed",
+      "error": "HTTP 301 Moved Permanently: <html>\r\n<head><title>301 Moved Permanently</title></head>\r\n<body>\r\n<center><h1>301 Moved Per",
+      "skipped": []
+    }
+  ],
+  "throughput": {
+    "1": {
+      "runs": 100,
+      "enqueue_s": 0.16400904097827151,
+      "makespan_s": 0.44315695797558874,
+      "runs_per_s": 225.65368364476518,
+      "succeeded": 100
+    },
+    "4": {
+      "runs": 100,
+      "enqueue_s": 0.08902195905102417,
+      "makespan_s": 0.21436991600785404,
+      "runs_per_s": 466.4833660537341,
+      "succeeded": 100
+    },
+    "8": {
+      "runs": 100,
+      "enqueue_s": 0.10925037501147017,
+      "makespan_s": 0.2581012080190703,
+      "runs_per_s": 387.444912666241,
+      "succeeded": 100
+    }
+  },
+  "fault": {
+    "GET_slow": {
+      "final_status": "succeeded",
+      "error": "",
+      "seconds_kill_to_terminal": 68.15470966597786,
+      "seconds_total": 68.23505712498445,
+      "steps": [
+        {
+          "node": "trigger",
+          "status": "running",
+          "attempt": 1
+        },
+        {
+          "node": "trigger",
+          "status": "succeeded",
+          "attempt": 1
+        },
+        {
+          "node": "call",
+          "status": "running",
+          "attempt": 1
+        },
+        {
+          "node": "call",
+          "status": "running",
+          "attempt": 2
+        },
+        {
+          "node": "call",
+          "status": "succeeded",
+          "attempt": 2
+        },
+        {
+          "node": "after",
+          "status": "running",
+          "attempt": 1
+        },
+        {
+          "node": "after",
+          "status": "succeeded",
+          "attempt": 1
+        }
+      ],
+      "runner_ids_seen": []
+    },
+    "POST_no_key": {
+      "final_status": "uncertain",
+      "error": "lease expired during non-idempotent action",
+      "seconds_kill_to_terminal": 60.30496066698106,
+      "seconds_total": 60.382344666984864,
+      "steps": [
+        {
+          "node": "trigger",
+          "status": "running",
+          "attempt": 1
+        },
+        {
+          "node": "trigger",
+          "status": "succeeded",
+          "attempt": 1
+        },
+        {
+          "node": "call",
+          "status": "running",
+          "attempt": 1
+        }
+      ],
+      "runner_ids_seen": []
+    },
+    "POST_idempotency_key": {
+      "final_status": "succeeded",
+      "error": "",
+      "seconds_kill_to_terminal": 68.36311170901172,
+      "seconds_total": 68.43914362502983,
+      "steps": [
+        {
+          "node": "trigger",
+          "status": "running",
+          "attempt": 1
+        },
+        {
+          "node": "trigger",
+          "status": "succeeded",
+          "attempt": 1
+        },
+        {
+          "node": "call",
+          "status": "running",
+          "attempt": 1
+        },
+        {
+          "node": "call",
+          "status": "running",
+          "attempt": 2
+        },
+        {
+          "node": "call",
+          "status": "succeeded",
+          "attempt": 2
+        },
+        {
+          "node": "after",
+          "status": "running",
+          "attempt": 1
+        },
+        {
+          "node": "after",
+          "status": "succeeded",
+          "attempt": 1
+        }
+      ],
+      "runner_ids_seen": []
+    }
+  },
+  "finished_at_utc": "2026-10-23T08:02:25Z"
+}
