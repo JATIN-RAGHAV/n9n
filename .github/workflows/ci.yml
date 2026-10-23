@@ -96,6 +96,67 @@ jobs:
       - run: npx --yes @redocly/cli@1.34.3 lint contracts/openapi.yaml
       - run: docker compose --env-file .env.example config --quiet
 
+  worker-api:
+    # The TypeScript Worker API (cloudflare/) must behave like the Go API
+    # (backend/): same schema, same smoke tests, same responses.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: n9n
+          POSTGRES_PASSWORD: n9n_test
+          POSTGRES_DB: n9n_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U n9n -d n9n_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DB_URL: postgres://n9n:n9n_test@localhost:5432/n9n_test?sslmode=disable
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check_api_sync.py
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runner
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+      - name: Build Go API and runner
+        run: |
+          (cd backend && go build -o /tmp/n9n-backend .)
+          (cd runner && cargo build --release --locked)
+      - name: Type-check the Worker
+        working-directory: cloudflare
+        run: npm ci && npx wrangler types && npx tsc --noEmit
+      - name: Start the Worker, the Go API and a runner
+        run: |
+          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" > cloudflare/.dev.vars
+          echo "RUNNER_TOKEN=$(openssl rand -hex 32)" >> cloudflare/.dev.vars
+          echo "COOKIE_SECURE=false" >> cloudflare/.dev.vars
+          echo "ALLOWED_ORIGIN=http://localhost:8787" >> cloudflare/.dev.vars
+          mkdir -p web/build/web && echo '<!doctype html><title>n9n</title>' > web/build/web/index.html
+          set -a; . cloudflare/.dev.vars; set +a
+          (cd cloudflare && CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="$DB_URL" npx wrangler dev --port 8787 > /tmp/worker.log 2>&1 &)
+          DATABASE_URL="$DB_URL" ADDR=127.0.0.1:18080 COOKIE_SECURE=false ALLOWED_ORIGIN= /tmp/n9n-backend > /tmp/go.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:8787/api/health && curl -sf http://127.0.0.1:18080/api/health && break; sleep 2; done
+          BACKEND_URL=http://localhost:8787 RUNNER_ID=ci RUNNER_HEALTH_DIR=/tmp/n9n-health runner/target/release/n9n-runner > /tmp/runner.log 2>&1 &
+      - run: python3 tests/e2e_smoke.py --base http://localhost:8787
+      - run: python3 tests/mobile_api_smoke.py --base http://localhost:8787
+      - run: python3 tests/replay_smoke.py --base http://localhost:8787
+      - run: python3 tests/api_parity.py --go http://127.0.0.1:18080 --ts http://localhost:8787
+      - if: failure()
+        run: tail -n 80 /tmp/worker.log /tmp/go.log /tmp/runner.log
+
   integration:
     runs-on: ubuntu-latest
     steps:
