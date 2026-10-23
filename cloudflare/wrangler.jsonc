@@ -24,7 +24,7 @@
   // disabled: the API must never read a cached session or run row.
   //   ./wrangler.sh hyperdrive create n9n-db --caching-disabled --connection-string=...
   // Local dev reads CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE.
-  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "REPLACE_WITH_HYPERDRIVE_ID" }],
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "19cbf94d50414094862923db8b5c3fc3" }],
 
   // 20 registration or login attempts per IP per minute, as in the Go API.
   "ratelimits": [{ "name": "AUTH_LIMITER", "namespace_id": "9091", "simple": { "limit": 20, "period": 60 } }],
