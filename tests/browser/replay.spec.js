@@ -20,6 +20,24 @@ async function replaceFlutterText(page, locator, value) {
   await page.keyboard.type(value, { delay: 30 });
 }
 
+// Flutter only exposes on-screen widgets to the accessibility tree, so a
+// section below the fold of the run inspector has to be scrolled into view.
+async function scrollIntoView(page, target) {
+  const locator = target.first();
+  const viewport = page.viewportSize();
+  // Wheel over the left margin: over the run canvas it would zoom the canvas instead.
+  await page.mouse.move(8, viewport.height / 2);
+  // Down the page, then back up past the top, a few rounds: the run page also
+  // refreshes itself while a run finishes.
+  for (let round = 0; round < 3; round++) {
+    for (const step of [...Array(6).fill(600), ...Array(12).fill(-600)]) {
+      if (await locator.isVisible()) return;
+      await page.mouse.wheel(0, step);
+      await page.waitForTimeout(150);
+    }
+  }
+}
+
 function currentRoute(page) {
   const url = new URL(page.url());
   return url.hash.startsWith('#/') ? url.hash.slice(1) : url.pathname;
@@ -69,11 +87,14 @@ test('a failed run is replayed from its failing step with a corrected input', as
   await page.goto(`/runs/${parentId}`);
   await enableFlutterSemantics(page);
   await expect(page.getByText('TIMELINE')).toBeVisible();
-  await expect(page.getByText('AT THIS MOMENT')).toBeVisible();
+  await scrollIntoView(page, page.getByRole('group', { name: /^AT THIS MOMENT/ }));
+  await expect(page.getByRole('group', { name: /^AT THIS MOMENT/ })).toBeVisible();
+  await scrollIntoView(page, page.getByRole('button', { name: 'Replay against current draft' }));
   await expect(page.getByRole('button', { name: 'Replay against current draft' })).toBeVisible();
 
   // The failing step is selected by default, so the moment panel's button
   // replays from it with the input edited to satisfy the mapping.
+  await scrollIntoView(page, page.getByRole('button', { name: 'Re-run from here' }));
   await page.getByRole('button', { name: 'Re-run from here' }).first().click();
   await expect(page.getByText(/Re-run from Set fields · needs/)).toBeVisible();
   const dialog = page.getByRole('alertdialog');
@@ -93,7 +114,9 @@ test('a failed run is replayed from its failing step with a corrected input', as
   const steps = Object.fromEntries(replay.steps.map((step) => [step.node_id, step]));
   expect(steps.stamp.output.absent.value).toBe(7);
   expect(steps.needs.output.copy).toBe(7);
-  await expect(page.getByText(/REPLAY FROM needs/)).toBeVisible();
+  await scrollIntoView(page, page.getByText(/REPLAY FROM needs/).or(page.getByRole('group', { name: /REPLAY FROM needs/ })));
+  await expect(page.getByText(/REPLAY FROM needs/).or(page.getByRole('group', { name: /REPLAY FROM needs/ }))).toBeVisible();
+  await scrollIntoView(page, page.getByRole('button', { name: new RegExp(`Replay of ${parentId.slice(0, 8)}`) }));
   await expect(page.getByRole('button', { name: new RegExp(`Replay of ${parentId.slice(0, 8)}`) })).toBeVisible();
 
   const parent = await (await page.request.get(`/api/runs/${parentId}`)).json();

@@ -12,12 +12,32 @@ async function typeFlutter(page, locator, value) {
   await page.keyboard.type(value, { delay: 50 });
 }
 
+// Flutter only exposes on-screen widgets to the accessibility tree, so a
+// section below the fold of the run inspector has to be scrolled into view.
+async function scrollIntoView(page, target) {
+  const locator = target.first();
+  const viewport = page.viewportSize();
+  // Wheel over the left margin: over the run canvas it would zoom the canvas instead.
+  await page.mouse.move(8, viewport.height / 2);
+  // Down the page, then back up past the top, a few rounds: the run page also
+  // refreshes itself while a run finishes.
+  for (let round = 0; round < 3; round++) {
+    for (const step of [...Array(6).fill(600), ...Array(12).fill(-600)]) {
+      if (await locator.isVisible()) return;
+      await page.mouse.wheel(0, step);
+      await page.waitForTimeout(150);
+    }
+  }
+}
+
 function currentRoute(page) {
   const url = new URL(page.url());
   return url.hash.startsWith('#/') ? url.hash.slice(1) : url.pathname;
 }
 
 test('Flutter Wasm UI builds and runs a workflow across a deep link and mobile menu', async ({ page }) => {
+  // This test walks the whole app: sign-up, editor, draft test, publish, run, reload, mobile menu, failure.
+  test.setTimeout(240_000);
   const errors = [];
   const assets = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -73,6 +93,7 @@ test('Flutter Wasm UI builds and runs a workflow across a deep link and mobile m
   expect((await (await page.request.get(`/api/workflows/${workflowPath.split('/').at(-1)}`)).json()).workflow.published_version)
     .toBeNull();
   await expect(page.getByText('DRAFT TEST')).toBeVisible();
+  await scrollIntoView(page, page.getByText('STEP BY STEP'));
   await expect(page.getByText('STEP BY STEP')).toBeVisible();
 
   await page.goto(workflowPath);
@@ -90,15 +111,22 @@ test('Flutter Wasm UI builds and runs a workflow across a deep link and mobile m
     const response = await page.request.get(`/api/runs/${runId}`);
     return (await response.json()).run?.status;
   }).toBe('succeeded');
+  // Once steps arrive, the timeline and run canvas push the step list below the fold.
+  await scrollIntoView(page, page.getByText('STEP BY STEP'));
   await expect(page.getByText('STEP BY STEP')).toBeVisible();
-  await expect(page.getByText(/Manual trigger ·/)).toBeVisible();
-  await expect(page.getByText(/Set fields ·/)).toBeVisible();
+  await scrollIntoView(page, page.getByText(/Manual trigger ·/));
+  await expect(page.getByText(/Manual trigger ·/).first()).toBeVisible();
+  await scrollIntoView(page, page.getByText(/Set fields ·/));
+  await expect(page.getByText(/Set fields ·/).first()).toBeVisible();
 
   await page.reload();
   await enableFlutterSemantics(page);
   await expect(page).toHaveURL(new RegExp(`/runs/${runId}$`));
+  await scrollIntoView(page, page.getByText('STEP BY STEP'));
   await expect(page.getByText('STEP BY STEP')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Set fields .* succeeded/ })).toBeVisible();
+  // The timeline, the run canvas and the step list each show the step; the step list row is last.
+  await scrollIntoView(page, page.getByRole('button', { name: /Set fields .* succeeded/ }).last());
+  await expect(page.getByRole('button', { name: /Set fields .* succeeded/ }).last()).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(workflowPath);
@@ -130,6 +158,7 @@ test('Flutter Wasm UI builds and runs a workflow across a deep link and mobile m
   const failureRunId = currentRoute(page).split('/').at(-1);
   await expect.poll(async () => (await (await page.request.get(`/api/runs/${failureRunId}`)).json()).run?.status)
     .toBe('failed');
+  await scrollIntoView(page, page.getByRole('group', { name: /missing input field absent/ }));
   await expect(page.getByRole('group', { name: /missing input field absent/ })).toBeVisible();
 
   expect(errors, `uncaught browser errors: ${errors.join(' | ')}`).toEqual([]);
