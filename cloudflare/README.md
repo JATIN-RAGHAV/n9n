@@ -1,6 +1,6 @@
 # n9n on Cloudflare (Workers + Containers)
 
-_Last updated: 2026-10-23 13:34 IST · Claude Fable 5.1 (claude-fable-5-1)_
+_Last updated: 2026-10-23 13:45 IST · Claude Fable 5.1 (claude-fable-5-1)_
 
 This folder deploys the whole n9n stack to Cloudflare with Wrangler:
 
@@ -28,16 +28,9 @@ npm install
 npm run deploy                            # builds web, builds the image, pushes everything
 ```
 
-After the first deploy, set the public origin so logins and Gmail OAuth work, then deploy again:
+`ALLOWED_ORIGIN` and `GOOGLE_REDIRECT_URI` in the `vars` block already point at `https://n9n.walrus.codes`; change them if the hostname changes. Gmail also needs `GOOGLE_CLIENT_ID` (var) and `GOOGLE_CLIENT_SECRET` (`wrangler secret put`).
 
-```sh
-./wrangler.sh deploy --var ALLOWED_ORIGIN:https://n9n.<your-subdomain>.workers.dev \
-  --var GOOGLE_REDIRECT_URI:https://n9n.<your-subdomain>.workers.dev/api/oauth/google/callback
-```
-
-Or edit the `vars` block in `wrangler.jsonc`. Gmail also needs `GOOGLE_CLIENT_ID` (var) and `GOOGLE_CLIENT_SECRET` (`wrangler secret put`).
-
-Check: `https://n9n.<subdomain>.workers.dev/healthz` (Worker) and `/api/health` (container). The first API call after a deploy takes 10–30 s while the container boots and the API runs migrations.
+The Worker is bound to the custom domain `n9n.walrus.codes` (`routes` in `wrangler.jsonc`); Wrangler creates the DNS record and certificate on deploy. Check: `https://n9n.walrus.codes/healthz` (Worker) and `/api/health` (container). The first API call after a deploy takes 10–30 s while the container boots and the API runs migrations.
 
 ## How requests flow
 
