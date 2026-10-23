@@ -23,7 +23,6 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type Server struct {
@@ -563,7 +562,7 @@ func (s *Server) auth(w http.ResponseWriter, r *http.Request, action string) {
 	}
 	var uid string
 	if action == "register" {
-		hash, e := bcrypt.GenerateFromPassword([]byte(a.Password), bcrypt.DefaultCost)
+		hash, e := hashPassword(a.Password)
 		if e != nil {
 			fail(w, 500, "password error")
 			return
@@ -577,7 +576,7 @@ func (s *Server) auth(w http.ResponseWriter, r *http.Request, action string) {
 	} else {
 		var hash []byte
 		e := s.db.QueryRow(`SELECT id,password_hash FROM users WHERE email=$1`, a.Email).Scan(&uid, &hash)
-		if e != nil || bcrypt.CompareHashAndPassword(hash, []byte(a.Password)) != nil {
+		if e != nil || !verifyPassword(hash, a.Password) {
 			fail(w, 401, "invalid credentials")
 			return
 		}
