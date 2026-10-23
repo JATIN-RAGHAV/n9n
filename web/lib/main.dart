@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'api.dart';
@@ -491,7 +492,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           key: ValueKey(route),
           api: widget.api,
           runId: route.split('/').last,
-          onBack: () => go('/workflows'));
+          onBack: () => go('/workflows'),
+          onOpenRun: (id) => go('/runs/$id'));
     } else {
       page =
           WorkflowHome(api: widget.api, onOpen: (id) => go('/workflows/$id'));
@@ -1001,10 +1003,13 @@ class RunDetailScreen extends StatefulWidget {
       {super.key,
       required this.api,
       required this.runId,
-      required this.onBack});
+      required this.onBack,
+      this.onOpenRun});
   final Api api;
   final String runId;
   final VoidCallback onBack;
+  // Opens another run, such as a replay just started or this run's parent.
+  final ValueChanged<String>? onOpenRun;
   @override
   State<RunDetailScreen> createState() => _RunDetailScreenState();
 }
@@ -1015,6 +1020,10 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
   Timer? polling;
   bool refreshing = false;
   final nodeTypes = <String, String>{};
+  // The graph the run executed, for the read-only canvas.
+  WorkflowDraft? graph;
+  // The timeline step the user picked; null follows the run's latest step.
+  int? pickedIndex;
   @override
   void initState() {
     super.initState();
@@ -1027,6 +1036,158 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
     super.dispose();
   }
 
+  void openRun(String id) {
+    if (widget.onOpenRun != null) {
+      widget.onOpenRun!(id);
+      return;
+    }
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => RunDetailScreen(
+            api: widget.api,
+            runId: id,
+            onBack: () => Navigator.pop(context))));
+  }
+
+  /// Opens the replay editor for [step]: the input it received can be
+  /// changed, side-effect nodes that would run again are listed, and the new
+  /// run opens once queued.
+  Future<void> replayFrom(Json step, {bool draft = false}) async {
+    final nodeId = '${step['node_id']}';
+    final original = step['input'] is Map ? asJson(step['input']) : <String, dynamic>{};
+    final controller = TextEditingController(
+        text: const JsonEncoder.withIndent('  ').convert(original));
+    // The side-effect warning follows the graph that will run: the parent's
+    // snapshot, or the current draft once it has been fetched.
+    final workflowId = '${asJson(detail?['run'])['workflow_id']}';
+    WorkflowDraft? draftGraph;
+    var draftFailed = false, draftLoading = false, dialogOpen = true;
+    Future<void> loadDraft(void Function(VoidCallback) refreshDialog) async {
+      if (draftGraph != null || draftLoading) return;
+      draftLoading = true;
+      try {
+        draftGraph = (await widget.api.workflow(workflowId)).draft;
+      } catch (_) {
+        draftFailed = true;
+      }
+      draftLoading = false;
+      if (dialogOpen) refreshDialog(() {});
+    }
+
+    if (draft) await loadDraft((_) {});
+    if (!mounted) return;
+    List<WorkflowNode> effectsIn(WorkflowDraft? source) => source == null
+        ? const []
+        : downstreamNodes(source, nodeId)
+            .where((n) => sideEffectTypes.contains(n.type))
+            .toList();
+    var useDraft = draft;
+    String? localError;
+    final choice = await showDialog<String>(
+        context: context,
+        builder: (context) => StatefulBuilder(builder: (context, setDialog) {
+              final effects = effectsIn(useDraft ? draftGraph : graph);
+              final warning = useDraft && draftLoading
+                  ? 'Loading the current draft to check which actions it would run…'
+                  : useDraft && draftFailed
+                      ? 'The current draft could not be loaded, so this replay may execute HTTP or Gmail nodes again.'
+                      : effects.isEmpty
+                          ? null
+                          : 'This replay executes ${effects.map((n) => '${nodeLabel(n.type)} · ${n.id}').join(', ')}. These actions reach external services again.';
+              return AlertDialog(
+                    title: Text('Re-run from ${stepTitle(step, nodeTypes)}'),
+                    content: SizedBox(
+                        width: 480,
+                        child: SingleChildScrollView(
+                            child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                              Text(
+                                  'Steps before this one keep their recorded outputs. Edit the input this step receives, then start the replay.',
+                                  style:
+                                      TextStyle(color: context.palette.muted)),
+                              const SizedBox(height: 14),
+                              Text('GRAPH', style: fieldLabel),
+                              const SizedBox(height: 6),
+                              Wrap(spacing: 8, children: [
+                                ChoiceChip(
+                                    label: Text('Original graph'),
+                                    selected: !useDraft,
+                                    onSelected: (_) =>
+                                        setDialog(() => useDraft = false)),
+                                ChoiceChip(
+                                    label: Text('Current draft'),
+                                    selected: useDraft,
+                                    onSelected: (_) {
+                                      setDialog(() => useDraft = true);
+                                      loadDraft(setDialog);
+                                    }),
+                              ]),
+                              const SizedBox(height: 14),
+                              TextField(
+                                  controller: controller,
+                                  maxLines: 8,
+                                  style: TextStyle(fontFamily: 'monospace'),
+                                  decoration: const InputDecoration(
+                                      labelText: 'Input JSON')),
+                              if (warning != null) ...[
+                                const SizedBox(height: 14),
+                                Container(
+                                    key: const ValueKey('replay-warning'),
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                        color: context.palette.errorBg,
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                    child: Text(warning,
+                                        style: TextStyle(
+                                            color:
+                                                context.palette.accentText))),
+                              ],
+                              if (localError != null) ...[
+                                const SizedBox(height: 10),
+                                Text(localError!,
+                                    style: TextStyle(
+                                        color: context.palette.accentText))
+                              ],
+                            ]))),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: Text('Cancel')),
+                      FilledButton(
+                          onPressed: () {
+                            try {
+                              final value = jsonDecode(controller.text);
+                              if (value is! Map) {
+                                throw const FormatException(
+                                    'Enter a JSON object.');
+                              }
+                              Navigator.pop(context, controller.text);
+                            } catch (_) {
+                              setDialog(() =>
+                                  localError = 'Enter a valid JSON object.');
+                            }
+                          },
+                          child: Text('Start replay'))
+                    ]);
+            }));
+    dialogOpen = false;
+    disposeDialogController(controller);
+    if (choice == null || !mounted) return;
+    final edited = asJson(jsonDecode(choice));
+    final changed = jsonEncode(edited) != jsonEncode(original);
+    try {
+      final run = await widget.api.replay(widget.runId,
+          fromNode: nodeId,
+          inputOverride: changed ? edited : null,
+          graph: useDraft ? 'draft' : 'original');
+      if (mounted) openRun('${run['id']}');
+    } catch (e) {
+      if (mounted) showError(context, '$e');
+    }
+  }
+
   Future<void> refresh() async {
     if (refreshing) return;
     refreshing = true;
@@ -1035,6 +1196,9 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
       if (!mounted) return;
       final run = asJson(data['run']);
       final snapshotTypes = asJson(data['node_types']);
+      if (data['graph'] is Map) {
+        graph = WorkflowDraft.fromJson(asJson(data['graph']));
+      }
       if (snapshotTypes.isNotEmpty) {
         nodeTypes
           ..clear()
@@ -1045,6 +1209,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
           for (final node in workflow.draft.nodes) {
             nodeTypes[node.id] = node.type;
           }
+          graph ??= workflow.draft;
         } catch (_) {/* The recorded node IDs still identify the steps. */}
       }
       if (mounted) {
@@ -1075,6 +1240,25 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
       latestSteps['${step['node_id']}:${step['attempt'] ?? 1}'] = step;
     }
     final steps = latestSteps.values.toList();
+    // Without a pick, the scrubber rests on the failure or the newest step.
+    final failedIndex =
+        steps.indexWhere((step) => '${step['status']}' == 'failed');
+    final selectedIndex = steps.isEmpty
+        ? null
+        : (pickedIndex != null && pickedIndex! < steps.length)
+            ? pickedIndex!
+            : failedIndex >= 0
+                ? failedIndex
+                : steps.length - 1;
+    final selectedStep = selectedIndex == null ? null : steps[selectedIndex];
+    final statuses = <String, String>{};
+    for (final step in steps) {
+      statuses['${step['node_id']}'] = '${step['status']}';
+    }
+    final finished = const {'succeeded', 'failed', 'cancelled', 'uncertain'}
+        .contains('${run['status']}');
+    final canReplay = finished && steps.isNotEmpty;
+    final children = asJsonList(detail?['children']);
     return ListView(padding: const EdgeInsets.all(32), children: [
       Align(
           alignment: Alignment.centerLeft,
@@ -1111,7 +1295,15 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                       }
                     },
                     icon: Icon(Icons.stop_circle_outlined),
-                    label: Text('Cancel run'))
+                    label: Text('Cancel run')),
+              if (canReplay &&
+                  (run['status'] == 'failed' || run['status'] == 'uncertain'))
+                FilledButton.icon(
+                    onPressed: () => replayFrom(
+                        failedIndex >= 0 ? steps[failedIndex] : steps.last,
+                        draft: true),
+                    icon: Icon(Icons.history),
+                    label: Text('Replay against current draft')),
             ])
           ]),
       const SizedBox(height: 24),
@@ -1126,15 +1318,73 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                 padding: const EdgeInsets.all(22),
                 child: Wrap(spacing: 28, runSpacing: 15, children: [
                   InfoDatum('STATUS', '${run['status'] ?? ''}'),
-                  InfoDatum('MODE', run['test'] == true ? 'DRAFT TEST' : 'PUBLISHED RUN'),
+                  InfoDatum(
+                      'MODE',
+                      run['kind'] == 'replay'
+                          ? 'REPLAY FROM ${run['resume_from_node'] ?? ''}'
+                          : run['kind'] == 'shadow'
+                              ? 'SHADOW RUN'
+                              : run['test'] == true
+                                  ? 'DRAFT TEST'
+                                  : 'PUBLISHED RUN'),
                   InfoDatum('CREATED', '${run['created_at'] ?? ''}'),
-                  InfoDatum('UPDATED', '${run['updated_at'] ?? ''}')
+                  InfoDatum('UPDATED', '${run['updated_at'] ?? ''}'),
+                  if (run['parent_run_id'] != null)
+                    TextButton.icon(
+                        onPressed: () => openRun('${run['parent_run_id']}'),
+                        icon: Icon(Icons.north_west, size: 16),
+                        label: Text(
+                            'Replay of ${shortRunId('${run['parent_run_id']}')}')),
                 ]))),
+        if (children.isNotEmpty)
+          Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Wrap(spacing: 8, runSpacing: 8, children: [
+                Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Text('REPLAYS', style: fieldLabel)),
+                ...children.map((child) => ActionChip(
+                    avatar: Icon(Icons.replay, size: 16),
+                    label: Text(
+                        '${shortRunId('${child['id']}')} · ${child['status']}'),
+                    onPressed: () => openRun('${child['id']}'))),
+              ])),
         if ('${run['error'] ?? ''}'.isNotEmpty)
           Padding(
               padding: const EdgeInsets.only(top: 12),
               child: SelectableText('Error: ${run['error']}',
                   style: TextStyle(color: context.palette.accentText))),
+        if (steps.isNotEmpty) ...[
+          const SizedBox(height: 22),
+          Text('TIMELINE', style: fieldLabel),
+          const SizedBox(height: 10),
+          RunTimeline(
+              steps: steps,
+              nodeTypes: nodeTypes,
+              selected: selectedIndex!,
+              onSelect: (index) => setState(() => pickedIndex = index)),
+          if (graph != null) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+                height: 340,
+                child: RunCanvas(
+                    graph: graph!,
+                    statuses: statuses,
+                    selected: '${selectedStep!['node_id']}',
+                    onSelect: (nodeId) {
+                      final index = steps
+                          .lastIndexWhere((step) => step['node_id'] == nodeId);
+                      if (index >= 0) setState(() => pickedIndex = index);
+                    })),
+          ],
+          const SizedBox(height: 14),
+          MomentPanel(
+              key: const ValueKey('moment'),
+              step: selectedStep!,
+              index: selectedIndex,
+              nodeTypes: nodeTypes,
+              onReplay: canReplay ? () => replayFrom(selectedStep) : null),
+        ],
         const SizedBox(height: 22),
         Text('STEP BY STEP', style: fieldLabel),
         const SizedBox(height: 12),
@@ -1144,6 +1394,8 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
               : 'No steps were recorded.'),
         ...steps.asMap().entries.map((entry) {
           final step = entry.value;
+          final duration = step['duration_ms'];
+          final attempts = asJsonList(step['attempts']);
           return Card(
               color: context.palette.panel,
               elevation: 0,
@@ -1156,13 +1408,20 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                           : context.palette.panelRaised,
                       child: Text('${entry.key + 1}',
                           style: TextStyle(color: context.palette.ink))),
-                  title: Text(
-                      nodeTypes.containsKey('${step['node_id']}')
-                          ? '${nodeLabel(nodeTypes['${step['node_id']}']!)} · ${step['node_id']}'
-                          : '${step['node_id'] ?? 'Step'}',
-                      style: TextStyle(fontWeight: FontWeight.w700)),
+                  title: Row(children: [
+                    Expanded(
+                        child: Text(
+                            nodeTypes.containsKey('${step['node_id']}')
+                                ? '${nodeLabel(nodeTypes['${step['node_id']}']!)} · ${step['node_id']}'
+                                : '${step['node_id'] ?? 'Step'}',
+                            style: TextStyle(fontWeight: FontWeight.w700))),
+                    if (duration is num) ...[
+                      const SizedBox(width: 10),
+                      DurationBadge(duration.toInt())
+                    ],
+                  ]),
                   subtitle: Text(
-                      '${step['status'] == 'running' && run['status'] != 'running' ? 'interrupted' : step['status'] ?? 'completed'} · attempt ${step['attempt'] ?? 1}'),
+                      '${step['status'] == 'running' && run['status'] != 'running' ? 'interrupted' : step['status'] ?? 'completed'} · attempt ${step['attempt'] ?? 1}${attempts.length > 1 ? ' · ${attempts.length} requests' : ''}'),
                   children: [
                     Padding(
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -1176,13 +1435,341 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                               JsonBlock(
                                   'INPUT', step['input'] ?? step['input_json']),
                               JsonBlock('OUTPUT',
-                                  step['output'] ?? step['output_json'])
+                                  step['output'] ?? step['output_json']),
+                              if (attempts.isNotEmpty) AttemptList(attempts),
+                              if (canReplay)
+                                Padding(
+                                    padding: const EdgeInsets.only(top: 14),
+                                    child: OutlinedButton.icon(
+                                        onPressed: () => replayFrom(step),
+                                        icon: Icon(Icons.replay, size: 16),
+                                        label: Text('Re-run from here'))),
                             ]))
                   ]));
         }),
       ],
     ]);
   }
+}
+
+Color stepColor(BuildContext context, String status) => switch (status) {
+      'succeeded' => pine,
+      'failed' => coral,
+      'running' => Colors.amber,
+      _ => context.palette.muted,
+    };
+
+String stepTitle(Json step, Map<String, String> nodeTypes) {
+  final nodeId = '${step['node_id'] ?? 'Step'}';
+  final type = nodeTypes[nodeId];
+  return type == null ? nodeId : '${nodeLabel(type)} · $nodeId';
+}
+
+/// A horizontal scrubber over the run's steps; the selected step drives the
+/// canvas highlight and the moment panel.
+class RunTimeline extends StatelessWidget {
+  const RunTimeline(
+      {super.key,
+      required this.steps,
+      required this.nodeTypes,
+      required this.selected,
+      required this.onSelect});
+  final List<Json> steps;
+  final Map<String, String> nodeTypes;
+  final int selected;
+  final ValueChanged<int> onSelect;
+  @override
+  Widget build(BuildContext context) => SizedBox(
+      height: 92,
+      child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: steps.length,
+          separatorBuilder: (_, __) => SizedBox(
+              width: 28,
+              child: Center(
+                  child: Container(height: 2, color: context.palette.line))),
+          itemBuilder: (context, index) {
+            final step = steps[index];
+            final status = '${step['status'] ?? ''}';
+            final chosen = index == selected;
+            final duration = step['duration_ms'];
+            return InkWell(
+                key: ValueKey('timeline:$index'),
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => onSelect(index),
+                child: Container(
+                    width: 170,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                        color: chosen
+                            ? context.palette.panelRaised
+                            : context.palette.panel,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: chosen ? pine : context.palette.line,
+                            width: chosen ? 2 : 1)),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Row(children: [
+                            Container(
+                                width: 10,
+                                height: 10,
+                                decoration: BoxDecoration(
+                                    color: stepColor(context, status),
+                                    shape: BoxShape.circle)),
+                            const SizedBox(width: 7),
+                            Text('${index + 1}', style: fieldLabel),
+                            const Spacer(),
+                            if (duration is num)
+                              Text(formatDurationMs(duration.toInt()),
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: context.palette.muted))
+                          ]),
+                          const SizedBox(height: 6),
+                          Text(stepTitle(step, nodeTypes),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 12, fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 3),
+                          Text(status,
+                              style: TextStyle(
+                                  fontSize: 11, color: context.palette.muted))
+                        ])));
+          }));
+}
+
+/// The executed graph, read only, with each node tinted by its step status
+/// and the selected node outlined.
+class RunCanvas extends StatelessWidget {
+  const RunCanvas(
+      {super.key,
+      required this.graph,
+      required this.statuses,
+      required this.selected,
+      required this.onSelect});
+  final WorkflowDraft graph;
+  final Map<String, String> statuses;
+  final String selected;
+  final ValueChanged<String> onSelect;
+  @override
+  Widget build(BuildContext context) {
+    if (graph.nodes.isEmpty) return const SizedBox.shrink();
+    // Shift the snapshot so its top-left node sits near the origin.
+    final minX = graph.nodes.map((n) => n.x).reduce(math.min) - 24;
+    final minY = graph.nodes.map((n) => n.y).reduce(math.min) - 24;
+    final shifted = graph.copy();
+    for (final node in shifted.nodes) {
+      node.x -= minX;
+      node.y -= minY;
+    }
+    final width = shifted.nodes.map((n) => n.x).reduce(math.max) + 260;
+    final height = shifted.nodes.map((n) => n.y).reduce(math.max) + 170;
+    return ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+            decoration: BoxDecoration(
+                color: context.palette.canvas,
+                border: Border.all(color: context.palette.line),
+                borderRadius: BorderRadius.circular(14)),
+            child: InteractiveViewer(
+                constrained: false,
+                minScale: .35,
+                maxScale: 2,
+                boundaryMargin: const EdgeInsets.all(400),
+                child: SizedBox(
+                    width: width,
+                    height: height,
+                    child: Stack(children: [
+                      Positioned.fill(
+                          child: CustomPaint(
+                              painter: GraphPainter(shifted, context.palette))),
+                      for (final node in shifted.nodes)
+                        Positioned(
+                            left: node.x,
+                            top: node.y,
+                            child: _RunNodeCard(
+                                node: node,
+                                status: statuses[node.id],
+                                selected: node.id == selected,
+                                onTap: () => onSelect(node.id))),
+                    ])))));
+  }
+}
+
+class _RunNodeCard extends StatelessWidget {
+  const _RunNodeCard(
+      {required this.node,
+      required this.status,
+      required this.selected,
+      required this.onTap});
+  final WorkflowNode node;
+  final String? status;
+  final bool selected;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    final condition = node.type == 'condition';
+    final tint = status == null
+        ? context.palette.line
+        : stepColor(context, status!);
+    return GestureDetector(
+        onTap: onTap,
+        child: Container(
+            key: ValueKey('canvas:${node.id}'),
+            width: 216,
+            height: condition ? 122 : 102,
+            decoration: BoxDecoration(
+                color: context.palette.panel,
+                borderRadius: BorderRadius.circular(13),
+                border: Border.all(
+                    color: selected ? coral : tint, width: selected ? 3 : 1.5)),
+            padding: const EdgeInsets.fromLTRB(15, 14, 15, 10),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Icon(iconFor(node.type), size: 18, color: tint),
+                const SizedBox(width: 9),
+                Expanded(
+                    child: Text(nodeLabel(node.type),
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w800))),
+              ]),
+              const SizedBox(height: 8),
+              Text(node.id,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, color: context.palette.muted)),
+              const SizedBox(height: 4),
+              Text(status ?? 'not reached',
+                  style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w700, color: tint)),
+            ])));
+  }
+}
+
+/// The input a step received and the output it produced at that moment.
+class MomentPanel extends StatelessWidget {
+  const MomentPanel(
+      {super.key,
+      required this.step,
+      required this.index,
+      required this.nodeTypes,
+      this.onReplay});
+  final Json step;
+  final int index;
+  final Map<String, String> nodeTypes;
+  final VoidCallback? onReplay;
+  @override
+  Widget build(BuildContext context) {
+    final duration = step['duration_ms'];
+    final error = '${step['error'] ?? ''}';
+    return Card(
+        color: context.palette.panel,
+        elevation: 0,
+        child: Padding(
+            padding: const EdgeInsets.all(20),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('AT THIS MOMENT', style: fieldLabel),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                    child: Text('${index + 1}. ${stepTitle(step, nodeTypes)}',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w800))),
+                StatusPill('${step['status'] ?? ''}',
+                    active: step['status'] == 'failed'),
+                if (duration is num) ...[
+                  const SizedBox(width: 8),
+                  DurationBadge(duration.toInt())
+                ],
+              ]),
+              if (error.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                SelectableText(error,
+                    style: TextStyle(color: context.palette.accentText)),
+              ],
+              JsonBlock('INPUT', step['input']),
+              JsonBlock('OUTPUT', step['output']),
+              if (onReplay != null)
+                Padding(
+                    padding: const EdgeInsets.only(top: 14),
+                    child: FilledButton.icon(
+                        onPressed: onReplay,
+                        style: FilledButton.styleFrom(backgroundColor: pine),
+                        icon: Icon(Icons.replay, size: 16),
+                        label: Text('Re-run from here'))),
+            ])));
+  }
+}
+
+String shortRunId(String id) => id.length > 8 ? id.substring(0, 8) : id;
+
+String formatDurationMs(int ms) => ms < 1000
+    ? '$ms ms'
+    : ms < 60000
+        ? '${(ms / 1000).toStringAsFixed(ms < 10000 ? 1 : 0)} s'
+        : '${(ms / 60000).toStringAsFixed(1)} min';
+
+class DurationBadge extends StatelessWidget {
+  const DurationBadge(this.ms, {super.key});
+  final int ms;
+  @override
+  Widget build(BuildContext context) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+          color: context.palette.panelRaised,
+          borderRadius: BorderRadius.circular(8)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.timer_outlined, size: 13, color: context.palette.muted),
+        const SizedBox(width: 4),
+        Text(formatDurationMs(ms),
+            style: TextStyle(
+                color: context.palette.muted,
+                fontSize: 11,
+                fontWeight: FontWeight.w700))
+      ]));
+}
+
+/// Every HTTP request a step made, so retries and their status codes show.
+class AttemptList extends StatelessWidget {
+  const AttemptList(this.attempts, {super.key});
+  final List<Json> attempts;
+  @override
+  Widget build(BuildContext context) => Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: Text('ATTEMPTS (${attempts.length})', style: fieldLabel),
+          children: attempts.map((attempt) {
+            final succeeded = attempt['status'] == 'succeeded';
+            final error = '${attempt['error'] ?? ''}';
+            final duration = attempt['duration_ms'];
+            return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                    succeeded
+                        ? Icons.check_circle_outline
+                        : Icons.error_outline,
+                    color: succeeded ? pine : coral,
+                    size: 18),
+                title: Text([
+                  'Attempt ${attempt['attempt'] ?? '?'}',
+                  '${attempt['status'] ?? ''}',
+                  if (attempt['http_status'] != null)
+                    'HTTP ${attempt['http_status']}',
+                  if (duration is num) formatDurationMs(duration.toInt()),
+                ].join(' · ')),
+                subtitle: error.isEmpty
+                    ? null
+                    : Text(error,
+                        style: TextStyle(color: context.palette.accentText)));
+          }).toList()));
 }
 
 class InfoDatum extends StatelessWidget {

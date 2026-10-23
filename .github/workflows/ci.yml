@@ -103,6 +103,7 @@ jobs:
       - run: make up
       - run: python3 tests/e2e_smoke.py
       - run: python3 tests/mobile_api_smoke.py
+      - run: python3 tests/replay_smoke.py
       - uses: actions/setup-node@v4
         with:
           node-version: 22

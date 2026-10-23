@@ -1,0 +1,7 @@
+# Local `wrangler dev` secrets. Copy to .dev.vars (gitignored).
+# The container reaches the Compose database through host.docker.internal.
+DATABASE_URL=postgres://n9n:n9n_local_dev@host.docker.internal:55432/n9n?sslmode=disable
+ENCRYPTION_KEY=replace-with-64-hex-characters
+RUNNER_TOKEN=replace-with-random-token
+COOKIE_SECURE=false
+ALLOWED_ORIGIN=http://localhost:8787

@@ -14,6 +14,52 @@ var emptyGraph = Graph{Nodes: []Node{}, Edges: []Edge{}}
 var nodeIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var mappingPattern = regexp.MustCompile(`\{\{\s*(input|nodes)\.([A-Za-z0-9_-]+)(?:\.([A-Za-z0-9_.-]+))?\s*\}\}`)
 
+// httpError is a failure with the status a handler should answer with.
+type httpError struct {
+	status int
+	msg    string
+}
+
+func (e *httpError) Error() string { return e.msg }
+
+// validatedDraft loads the owner's saved draft under a share lock, checks it
+// the way publish does and returns it with the version a snapshot run reports:
+// the published version, or zero when nothing is published yet.
+func validatedDraft(tx *sql.Tx, wid, uid string) (Graph, int, *httpError) {
+	var draftText string
+	var published sql.NullInt64
+	if err := tx.QueryRow(`SELECT draft,published_version FROM workflows WHERE id=$1 AND user_id=$2 FOR SHARE`, wid, uid).Scan(&draftText, &published); err != nil {
+		return Graph{}, 0, &httpError{404, "workflow not found"}
+	}
+	var graph Graph
+	if err := json.Unmarshal([]byte(draftText), &graph); err != nil {
+		return Graph{}, 0, &httpError{500, "invalid stored workflow"}
+	}
+	if err := validatePublish(graph); err != nil {
+		return Graph{}, 0, &httpError{400, err.Error()}
+	}
+	version := 0
+	if published.Valid {
+		version = int(published.Int64)
+	}
+	return graph, version, nil
+}
+
+// checkCredentials confirms every credential a graph references belongs to
+// the user, so a run can decrypt them.
+func checkCredentials(q querier, graph Graph, uid string) *httpError {
+	for _, node := range graph.Nodes {
+		if node.CredentialID == "" {
+			continue
+		}
+		var count int
+		if err := q.QueryRow(`SELECT count(*) FROM credentials WHERE id=$1 AND user_id=$2`, node.CredentialID, uid).Scan(&count); err != nil || count == 0 {
+			return &httpError{400, "credential not found: " + node.CredentialID}
+		}
+	}
+	return nil
+}
+
 func loadWorkflow(db *sql.DB, id, uid string) (Workflow, error) {
 	var w Workflow
 	var draft string
@@ -159,19 +205,9 @@ func (s *Server) workflows(w http.ResponseWriter, r *http.Request, uid string, p
 				return
 			}
 			defer tx.Rollback()
-			var draftText string
-			var published sql.NullInt64
-			if err = tx.QueryRow(`SELECT draft,published_version FROM workflows WHERE id=$1 AND user_id=$2 FOR SHARE`, x.ID, uid).Scan(&draftText, &published); err != nil {
-				fail(w, 404, "workflow not found")
-				return
-			}
-			var graph Graph
-			if err = json.Unmarshal([]byte(draftText), &graph); err != nil {
-				fail(w, 500, "invalid stored workflow")
-				return
-			}
-			if err = validatePublish(graph); err != nil {
-				fail(w, 400, err.Error())
+			graph, version, herr := validatedDraft(tx, x.ID, uid)
+			if herr != nil {
+				fail(w, herr.status, herr.msg)
 				return
 			}
 			var request struct {
@@ -189,19 +225,9 @@ func (s *Server) workflows(w http.ResponseWriter, r *http.Request, uid string, p
 				fail(w, 400, "run input exceeds nesting limit of 32")
 				return
 			}
-			for _, node := range graph.Nodes {
-				if node.CredentialID == "" {
-					continue
-				}
-				var count int
-				if err = tx.QueryRow(`SELECT count(*) FROM credentials WHERE id=$1 AND user_id=$2`, node.CredentialID, uid).Scan(&count); err != nil || count == 0 {
-					fail(w, 400, "credential not found: "+node.CredentialID)
-					return
-				}
-			}
-			version := 0
-			if published.Valid {
-				version = int(published.Int64)
+			if herr = checkCredentials(tx, graph, uid); herr != nil {
+				fail(w, herr.status, herr.msg)
+				return
 			}
 			run, err := queueTestRun(tx, x.ID, version, graph, input)
 			if err != nil {

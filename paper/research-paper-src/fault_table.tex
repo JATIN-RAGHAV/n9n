@@ -1,0 +1,4 @@
+GET (idempotent by method) & \emph{succeeded} & 68.2 & call: succeeded, attempt 2 \\
+POST, no idempotency key & \emph{uncertain} & 60.3 & call: running, attempt 1; lease expired during non-idempotent action \\
+POST with idempotency key & \emph{succeeded} & 68.4 & call: succeeded, attempt 2 \\
+\bottomrule

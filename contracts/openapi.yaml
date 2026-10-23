@@ -92,6 +92,14 @@ paths:
       responses:
         '200': {description: Node catalog, content: {application/json: {schema: {$ref: '#/components/schemas/CatalogResponse'}}}}
         default: {$ref: '#/components/responses/Error'}
+  /features:
+    get:
+      operationId: listFeatures
+      summary: Report which optional features this deployment has enabled
+      description: ai is on when ANTHROPIC_API_KEY is set; code_node when ENABLE_CODE_NODE=true. Clients hide disabled features.
+      responses:
+        '200': {description: Feature flags, content: {application/json: {schema: {$ref: '#/components/schemas/FeaturesResponse'}}}}
+        default: {$ref: '#/components/responses/Error'}
   /workflows:
     get:
       operationId: listWorkflows
@@ -194,6 +202,20 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/Run'}
         default: {$ref: '#/components/responses/Error'}
+  /runs/{id}/replay:
+    parameters:
+      - {$ref: '#/components/parameters/id'}
+    post:
+      operationId: replayRun
+      summary: Queue a replay of a finished run from a chosen node
+      description: Creates a run with kind replay, parent_run_id and resume_from_node set. The server walks the graph from the trigger the way the worker will, until it reaches from_node. Conditions on the path to from_node are forced onto that path, so a node the parent skipped can be replayed; other conditions keep their recorded branch. Only the nodes that walk reaches are copied from the parent's succeeded steps, so sibling branches are neither copied nor re-executed, and from_node with everything downstream runs again. input_override replaces the feeder node's copied output, or the run input when from_node is the trigger. graph draft validates and snapshots the current draft without publishing it. Copied steps carry finished_at but no started_at or duration_ms.
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReplayRequest'}}}}
+      responses:
+        '200': {$ref: '#/components/responses/Run'}
+        '400': {description: from_node is not in the chosen graph or the draft fails validation or a node the replay would reuse never completed in the parent run (replay from it or earlier), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '404': {description: The run belongs to another account or does not exist, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: The parent run is still queued or running, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        default: {$ref: '#/components/responses/Error'}
   /credentials:
     get:
       operationId: listCredentials
@@ -264,6 +286,20 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/StepEvent'}}}}
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        default: {$ref: '#/components/responses/Error'}
+  /internal/jobs/{id}/attempts:
+    servers: [{url: /}]
+    parameters: [{$ref: '#/components/parameters/id'}]
+    post:
+      operationId: recordAttempt
+      summary: Record one HTTP request made by a node under an active lease
+      description: The HTTP node reports every request it makes, so retries are visible. Reports never change the step result. A report that repeats a step_attempt and attempt already stored is ignored, so a runner may resend one after a lost response.
+      security: [{runnerBearer: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AttemptEvent'}}}}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {description: Invalid attempt or node not in the workflow, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: The lease is not active, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         default: {$ref: '#/components/responses/Error'}
   /internal/jobs/{id}/complete:
     servers: [{url: /}]
@@ -379,17 +415,22 @@ components:
     WorkflowCreate: {type: object, properties: {name: {type: string, maxLength: 200}, draft: {$ref: '#/components/schemas/Graph'}}}
     Workflow: {allOf: [{$ref: '#/components/schemas/WorkflowWrite'}, {type: object, required: [id, published_version, active, created_at, updated_at], properties: {id: {type: string}, published_version: {type: [integer, 'null'], minimum: 1}, active: {type: boolean}, created_at: {type: string, format: date-time}, updated_at: {type: string, format: date-time}}}]}
     WorkflowList: {type: object, required: [workflows], properties: {workflows: {type: array, items: {$ref: '#/components/schemas/Workflow'}}}}
-    Run: {type: object, required: [id, workflow_id, version, status, input, created_at, updated_at], properties: {id: {type: string}, workflow_id: {type: string}, version: {type: integer, minimum: 0, description: Zero denotes an unversioned draft test}, test: {type: boolean}, status: {type: string, enum: [queued, running, succeeded, failed, cancelled, uncertain]}, input: {type: object, additionalProperties: true}, error: {type: string}, created_at: {type: string, format: date-time}, updated_at: {type: string, format: date-time}}}
+    RunKind: {type: string, enum: [normal, test, replay, shadow], description: normal runs execute a published version while the other kinds carry a graph snapshot}
+    Run: {type: object, required: [id, workflow_id, version, kind, status, input, created_at, updated_at], properties: {id: {type: string}, workflow_id: {type: string}, version: {type: integer, minimum: 0, description: Zero denotes an unversioned draft test}, kind: {$ref: '#/components/schemas/RunKind'}, test: {type: boolean, description: Deprecated mirror of kind == test for older clients}, parent_run_id: {type: [string, 'null'], description: The run a replay or shadow run came from}, resume_from_node: {type: string, description: The node a replay starts at}, status: {type: string, enum: [queued, running, succeeded, failed, cancelled, uncertain]}, input: {type: object, additionalProperties: true}, error: {type: string}, created_at: {type: string, format: date-time}, updated_at: {type: string, format: date-time}}}
     RunList: {type: object, required: [runs], properties: {runs: {type: array, items: {$ref: '#/components/schemas/Run'}}}}
-    Step: {type: object, required: [node_id, status, input, output, attempt, created_at], properties: {node_id: {type: string}, status: {type: string, enum: [running, succeeded, failed, skipped]}, input: {}, output: {}, error: {type: string}, branch: {type: string, enum: ['true', 'false']}, attempt: {type: integer}, created_at: {type: string, format: date-time}}}
-    RunDetail: {type: object, required: [run, steps, node_types], properties: {run: {$ref: '#/components/schemas/Run'}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}, node_types: {type: object, additionalProperties: {type: string}}}}
+    Step: {type: object, description: One step event; steps a replay copied from its parent are succeeded rows with finished_at but no started_at or duration_ms, required: [node_id, status, input, output, attempt, created_at], properties: {node_id: {type: string}, status: {type: string, enum: [running, succeeded, failed, skipped]}, input: {}, output: {}, error: {type: string}, branch: {type: string, enum: ['true', 'false']}, attempt: {type: integer, description: Execution attempt of the node; increases when a run resumes}, started_at: {type: string, format: date-time}, finished_at: {type: string, format: date-time, description: Set by the server for every terminal step}, duration_ms: {type: integer, minimum: 0}, attempts: {type: array, description: HTTP requests the node made during this execution attempt (on the latest row of that attempt; attempts an older runner reported without step_attempt sit on the node's latest row), items: {$ref: '#/components/schemas/StepAttempt'}}, created_at: {type: string, format: date-time}}}
+    StepAttempt: {type: object, required: [attempt, status, duration_ms, created_at], properties: {step_attempt: {type: integer, minimum: 1, description: The execution attempt of the step this request belongs to}, attempt: {type: integer, minimum: 1}, status: {type: string, enum: [succeeded, failed]}, http_status: {type: integer, minimum: 100, maximum: 599}, error: {type: string}, duration_ms: {type: integer, minimum: 0}, created_at: {type: string, format: date-time}}}
+    RunDetail: {type: object, required: [run, steps, node_types, graph, children], properties: {run: {$ref: '#/components/schemas/Run'}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}, node_types: {type: object, additionalProperties: {type: string}}, graph: {$ref: '#/components/schemas/Graph', description: The graph the run executed (its snapshot or published version)}, children: {type: array, description: Replay and shadow runs that came from this run, items: {$ref: '#/components/schemas/Run'}}}}
+    ReplayRequest: {type: object, required: [from_node], properties: {from_node: {type: string, description: The node the replay starts at; it and everything downstream execute again}, input_override: {type: object, additionalProperties: true, description: Replaces the input from_node receives}, graph: {type: string, enum: [original, draft], default: original}}}
     Credential: {type: object, required: [id, name, kind, created_at], properties: {id: {type: string}, name: {type: string}, kind: {type: string}, created_at: {type: string, format: date-time}}}
     PrivateCredential: {type: object, required: [id, name, kind, data], properties: {id: {type: string}, name: {type: string}, kind: {type: string}, data: {type: object, additionalProperties: true}}}
     CredentialCreate: {type: object, required: [name, kind, data], properties: {name: {type: string, maxLength: 200}, kind: {type: string, maxLength: 100}, data: {type: object, additionalProperties: true}}}
     CredentialList: {type: object, required: [credentials], properties: {credentials: {type: array, items: {$ref: '#/components/schemas/Credential'}}}}
     CatalogEntry: {type: object, required: [type, name, category, description, config_schema, input_ports, output_ports, input_schema, output_schema], properties: {type: {type: string}, name: {type: string}, category: {type: string}, description: {type: string}, config_schema: {type: object, additionalProperties: true}, input_ports: {type: array, items: {type: string}}, output_ports: {type: array, items: {type: string}}, input_schema: {type: object, additionalProperties: true}, output_schema: {type: object, additionalProperties: true}}}
-    CatalogResponse: {type: object, required: [version, nodes], properties: {version: {type: integer, const: 1}, nodes: {type: array, items: {$ref: '#/components/schemas/CatalogEntry'}}}}
+    CatalogResponse: {type: object, required: [version, nodes], properties: {version: {type: integer, const: 2, description: Clients ignore node types they cannot render}, nodes: {type: array, items: {$ref: '#/components/schemas/CatalogEntry'}}}}
+    FeaturesResponse: {type: object, required: [features], properties: {features: {type: object, required: [ai, code_node], properties: {ai: {type: boolean}, code_node: {type: boolean}}, additionalProperties: {type: boolean}}}}
     EventResponse: {type: object, required: [run, duplicate], properties: {run: {oneOf: [{$ref: '#/components/schemas/Run'}, {type: 'null'}]}, duplicate: {type: boolean}}}
-    Job: {type: object, required: [id, lease_token, workflow_id, version, graph, input, steps, test], properties: {id: {type: string}, lease_token: {type: string}, workflow_id: {type: string}, version: {type: integer}, graph: {$ref: '#/components/schemas/Graph'}, input: {type: object, additionalProperties: true}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}, test: {type: boolean}}}
-    StepEvent: {type: object, required: [lease_token, node_id, status, input, output], properties: {lease_token: {type: string}, node_id: {type: string}, status: {type: string, enum: [running, succeeded, failed, skipped]}, input: {}, output: {}, error: {type: string}, branch: {type: string, enum: ['', 'true', 'false']}, attempt: {type: integer}}}
+    Job: {type: object, required: [id, lease_token, workflow_id, version, graph, input, steps, test, kind], properties: {id: {type: string}, lease_token: {type: string}, workflow_id: {type: string}, version: {type: integer}, graph: {$ref: '#/components/schemas/Graph'}, input: {type: object, additionalProperties: true}, steps: {type: array, items: {$ref: '#/components/schemas/Step'}}, test: {type: boolean}, kind: {$ref: '#/components/schemas/RunKind'}}}
+    StepEvent: {type: object, required: [lease_token, node_id, status, input, output], properties: {lease_token: {type: string}, node_id: {type: string}, status: {type: string, enum: [running, succeeded, failed, skipped]}, input: {}, output: {}, error: {type: string}, branch: {type: string, enum: ['', 'true', 'false']}, attempt: {type: integer}, started_at: {type: string, format: date-time}, duration_ms: {type: integer, minimum: 0, maximum: 604800000}}}
+    AttemptEvent: {type: object, required: [lease_token, node_id, attempt, status, duration_ms], properties: {lease_token: {type: string}, node_id: {type: string}, step_attempt: {type: integer, minimum: 1, maximum: 100, description: The execution attempt of the step (the attempt field of its step events)}, attempt: {type: integer, minimum: 1, maximum: 100}, status: {type: string, enum: [succeeded, failed]}, http_status: {type: [integer, 'null'], minimum: 100, maximum: 599}, error: {type: string}, duration_ms: {type: integer, minimum: 0, maximum: 604800000}}}
     TriggerSnapshot: {type: object, required: [workflow_id, version, node, checkpoint], properties: {workflow_id: {type: string}, version: {type: integer}, node: {$ref: '#/components/schemas/Node'}, checkpoint: {}}}

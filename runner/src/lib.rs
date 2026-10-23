@@ -18,8 +18,26 @@ use tokio::{
     net::lookup_host,
     time::{sleep, timeout},
 };
+use url::Host;
 
 pub type Result<T> = std::result::Result<T, String>;
+
+/// When a node started running, for step timing reports.
+pub struct StepTiming {
+    pub started_at: String,
+    started: std::time::Instant,
+}
+impl StepTiming {
+    pub fn start() -> Self {
+        Self {
+            started_at: Utc::now().format("%Y-%m-%dT%H:%M:%S%.9fZ").to_string(),
+            started: std::time::Instant::now(),
+        }
+    }
+    pub fn elapsed_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+}
 
 pub fn health_touch(kind: &str) {
     let dir = std::env::var("RUNNER_HEALTH_DIR").unwrap_or_else(|_| "/tmp/n9n-health".into());
@@ -119,7 +137,52 @@ impl Api {
         branch: &str,
         attempt: u32,
     ) -> Result<()> {
-        self.post(&format!("/internal/jobs/{}/steps",job.id),json!({"lease_token":job.lease_token,"node_id":node,"status":status,"input":input,"output":output,"error":error,"branch":branch,"attempt":attempt})).await.map(|_|())
+        self.step_timed(
+            job, node, status, input, output, error, branch, attempt, None,
+        )
+        .await
+    }
+    /// Posts a step record, including when the node started and, for a
+    /// finished node, how long it ran.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn step_timed(
+        &self,
+        job: &Job,
+        node: &str,
+        status: &str,
+        input: Value,
+        output: Value,
+        error: &str,
+        branch: &str,
+        attempt: u32,
+        timing: Option<&StepTiming>,
+    ) -> Result<()> {
+        let mut body = json!({"lease_token":job.lease_token,"node_id":node,"status":status,"input":input,"output":output,"error":error,"branch":branch,"attempt":attempt});
+        if let Some(timing) = timing {
+            body["started_at"] = json!(timing.started_at);
+            if status != "running" {
+                body["duration_ms"] = json!(timing.elapsed_ms());
+            }
+        }
+        self.post(&format!("/internal/jobs/{}/steps", job.id), body)
+            .await
+            .map(|_| ())
+    }
+    /// Reports one HTTP request a node made during its `step_attempt`-th
+    /// execution, so retries are visible in the run.
+    pub async fn attempt(
+        &self,
+        job: &Job,
+        node: &str,
+        step_attempt: u32,
+        attempt: &HttpAttempt,
+    ) -> Result<()> {
+        self.post(
+            &format!("/internal/jobs/{}/attempts", job.id),
+            json!({"lease_token":job.lease_token,"node_id":node,"step_attempt":step_attempt,"attempt":attempt.attempt,"status":attempt.status,"http_status":attempt.http_status,"error":attempt.error,"duration_ms":attempt.duration_ms}),
+        )
+        .await
+        .map(|_| ())
     }
     pub async fn complete(&self, job: &Job, status: &str, error: &str) -> Result<()> {
         self.post(
@@ -380,25 +443,33 @@ pub async fn safe_http_client(url: &Url, allow_private: bool) -> Result<Client> 
     if !url.username().is_empty() || url.password().is_some() {
         return Err("URL credentials forbidden".into());
     };
-    let host = url.host_str().ok_or("URL host required")?;
     let port = url.port_or_known_default().ok_or("URL port required")?;
-    let addresses: Vec<SocketAddr> = lookup_host((host, port))
-        .await
-        .map_err(|e| format!("DNS: {e}"))?
-        .collect();
+    let (domain, addresses): (Option<&str>, Vec<SocketAddr>) =
+        match url.host().ok_or("URL host required")? {
+            Host::Ipv4(ip) => (None, vec![SocketAddr::new(IpAddr::V4(ip), port)]),
+            Host::Ipv6(ip) => (None, vec![SocketAddr::new(IpAddr::V6(ip), port)]),
+            Host::Domain(name) => (
+                Some(name),
+                lookup_host((name, port))
+                    .await
+                    .map_err(|e| format!("DNS: {e}"))?
+                    .collect(),
+            ),
+        };
     if addresses.is_empty() {
         return Err("DNS returned no addresses".into());
     };
     if !allow_private && addresses.iter().any(|x| !is_public_ip(x.ip())) {
         return Err("private or reserved HTTP address blocked".into());
     };
-    Client::builder()
+    let mut builder = Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(15))
-        .resolve_to_addrs(host, &addresses)
-        .build()
-        .map_err(|e| e.to_string())
+        .timeout(Duration::from_secs(15));
+    if let Some(name) = domain {
+        builder = builder.resolve_to_addrs(name, &addresses);
+    }
+    builder.build().map_err(|e| e.to_string())
 }
 
 fn string_config<'a>(config: &'a Value, key: &str) -> Result<&'a str> {
@@ -407,11 +478,89 @@ fn string_config<'a>(config: &'a Value, key: &str) -> Result<&'a str> {
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{key} must be string"))
 }
+/// One HTTP request made by an `http_request` node; retries produce several.
+#[derive(Clone, Debug, Serialize)]
+pub struct HttpAttempt {
+    pub attempt: u32,
+    pub status: &'static str,
+    pub http_status: Option<u16>,
+    pub error: String,
+    pub duration_ms: u64,
+}
+
 pub async fn http_node(
     config: &Value,
     input: &Value,
     outputs: &HashMap<String, Value>,
     allow_private: bool,
+) -> Result<Value> {
+    http_node_with_attempts(config, input, outputs, allow_private)
+        .await
+        .0
+}
+/// Like `http_node`, but also returns every request that was made, so retries
+/// can be reported even when the node fails.
+pub async fn http_node_with_attempts(
+    config: &Value,
+    input: &Value,
+    outputs: &HashMap<String, Value>,
+    allow_private: bool,
+) -> (Result<Value>, Vec<HttpAttempt>) {
+    let mut attempts = Vec::new();
+    let result = http_request_loop(config, input, outputs, allow_private, &mut attempts).await;
+    (result, attempts)
+}
+/// Attempt errors can quote a whole response body; keep reports small and
+/// cut on a character boundary so the backend stores valid text.
+fn cap_error(error: &str) -> String {
+    const LIMIT: usize = 4096;
+    if error.len() <= LIMIT {
+        return error.to_string();
+    }
+    let mut cut = LIMIT;
+    while !error.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    error[..cut].to_string()
+}
+async fn read_body(res: &mut reqwest::Response, ambiguous: bool) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = timeout(Duration::from_secs(10), res.chunk())
+            .await
+            .map_err(|_| {
+                if ambiguous {
+                    "uncertain: HTTP response timeout".to_string()
+                } else {
+                    "HTTP response timeout".to_string()
+                }
+            })?
+            .map_err(|e| {
+                if ambiguous {
+                    format!("uncertain: HTTP response read failed: {e}")
+                } else {
+                    e.to_string()
+                }
+            })?;
+        let Some(chunk) = chunk else { break };
+        if bytes.len() + chunk.len() > 256 << 10 {
+            return Err(if ambiguous {
+                "uncertain: HTTP response too large"
+            } else {
+                "HTTP response too large"
+            }
+            .into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+async fn http_request_loop(
+    config: &Value,
+    input: &Value,
+    outputs: &HashMap<String, Value>,
+    allow_private: bool,
+    attempts: &mut Vec<HttpAttempt>,
 ) -> Result<Value> {
     let rendered = render(config, input, outputs)?;
     let url = Url::parse(string_config(&rendered, "url")?).map_err(|e| e.to_string())?;
@@ -425,9 +574,20 @@ pub async fn http_node(
         Some(_) => return Err("idempotency_key must render to a nonempty string".into()),
     };
     let ambiguous = !safe && idem.is_none();
+    let retryable = safe || idem.is_some();
     let mut tries = 0;
     loop {
         tries += 1;
+        let started = std::time::Instant::now();
+        let mut record = |status: &'static str, http_status: Option<u16>, error: &str| {
+            attempts.push(HttpAttempt {
+                attempt: tries,
+                status,
+                http_status,
+                error: cap_error(error),
+                duration_ms: started.elapsed().as_millis() as u64,
+            })
+        };
         let mut req = client.request(method.clone(), url.clone());
         if let Some(headers) = rendered["headers"].as_object() {
             for (k, v) in headers {
@@ -460,41 +620,15 @@ pub async fn http_node(
                             .map(|x| (k.to_string(), Value::String(x.into())))
                     })
                     .collect();
-                let mut bytes = Vec::new();
-                loop {
-                    let chunk = timeout(Duration::from_secs(10), res.chunk())
-                        .await
-                        .map_err(|_| {
-                            if ambiguous {
-                                "uncertain: HTTP response timeout".to_string()
-                            } else {
-                                "HTTP response timeout".to_string()
-                            }
-                        })?
-                        .map_err(|e| {
-                            if ambiguous {
-                                format!("uncertain: HTTP response read failed: {e}")
-                            } else {
-                                e.to_string()
-                            }
-                        })?;
-                    let Some(chunk) = chunk else { break };
-                    if bytes.len() + chunk.len() > 256 << 10 {
-                        return Err(if ambiguous {
-                            "uncertain: HTTP response too large"
-                        } else {
-                            "HTTP response too large"
-                        }
-                        .into());
+                let bytes = match read_body(&mut res, ambiguous).await {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        record("failed", Some(status.as_u16()), &e);
+                        return Err(e);
                     }
-                    bytes.extend_from_slice(&chunk);
-                }
-                if status.is_server_error() && (safe || idem.is_some()) && tries < 3 {
-                    sleep(Duration::from_millis(250 * tries)).await;
-                    continue;
                 };
                 if !status.is_success() {
-                    return Err(format!(
+                    let error = format!(
                         "{}HTTP {}: {}",
                         if ambiguous && status.is_server_error() {
                             "uncertain: "
@@ -503,21 +637,30 @@ pub async fn http_node(
                         },
                         status,
                         String::from_utf8_lossy(&bytes)
-                    ));
+                    );
+                    record("failed", Some(status.as_u16()), &error);
+                    if status.is_server_error() && retryable && tries < 3 {
+                        sleep(Duration::from_millis(250 * u64::from(tries))).await;
+                        continue;
+                    };
+                    return Err(error);
                 };
+                record("succeeded", Some(status.as_u16()), "");
                 let body = serde_json::from_slice::<Value>(&bytes)
                     .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).to_string()));
                 return Ok(json!({"status":status.as_u16(),"headers":headers,"body":body}));
             }
             Err(e) => {
-                if (safe || idem.is_some()) && tries < 3 {
-                    sleep(Duration::from_millis(250 * tries)).await;
-                    continue;
-                };
-                return Err(format!(
+                let error = format!(
                     "{}HTTP request failed: {e}",
                     if ambiguous { "uncertain: " } else { "" }
-                ));
+                );
+                record("failed", None, &error);
+                if retryable && tries < 3 {
+                    sleep(Duration::from_millis(250 * u64::from(tries))).await;
+                    continue;
+                };
+                return Err(error);
             }
         }
     }
@@ -615,6 +758,9 @@ async fn execute_inner(
         let mut branch = String::new();
         let mut output = Value::Null;
         if skip {
+            // A replay may carry this node's output from the parent run; once
+            // the node is skipped here, mappings must not see it.
+            outputs.remove(&node_id);
             if already != Some("skipped") {
                 api.step(
                     job,
@@ -638,7 +784,8 @@ async fn execute_inner(
             {
                 return Err(format!("uncertain: interrupted action {}", node_id));
             };
-            api.step(
+            let timing = StepTiming::start();
+            api.step_timed(
                 job,
                 &node_id,
                 "running",
@@ -647,11 +794,12 @@ async fn execute_inner(
                 "",
                 "",
                 attempt,
+                Some(&timing),
             )
             .await?;
-            let action = run_node(api, job, node, &input, &outputs, allow_private).await;
-            match action {
-                Ok((o, b)) => {
+            let action = run_node(api, job, node, &input, &outputs, allow_private, attempt)
+                .await
+                .and_then(|(o, b)| {
                     let output_len = serde_json::to_vec(&o)
                         .map_err(|error| error.to_string())?
                         .len();
@@ -663,10 +811,14 @@ async fn execute_inner(
                         }
                         .into());
                     }
+                    Ok((o, b))
+                });
+            match action {
+                Ok((o, b)) => {
                     output = o;
                     branch = b;
                     outputs.insert(node_id.clone(), output.clone());
-                    api.step(
+                    api.step_timed(
                         job,
                         &node_id,
                         "succeeded",
@@ -675,13 +827,14 @@ async fn execute_inner(
                         "",
                         &branch,
                         attempt,
+                        Some(&timing),
                     )
                     .await
                     .map_err(|error| if is_unsafe(&node.kind, &node.config) { format!("uncertain: action succeeded but step could not be recorded: {error}") } else { error })?
                 }
                 Err(e) => {
                     let report = api
-                        .step(
+                        .step_timed(
                             job,
                             &node_id,
                             "failed",
@@ -690,6 +843,7 @@ async fn execute_inner(
                             &e,
                             "",
                             attempt,
+                            Some(&timing),
                         )
                         .await;
                     if let Err(report_error) = report {
@@ -731,6 +885,7 @@ async fn run_node(
     input: &Value,
     outputs: &HashMap<String, Value>,
     allow_private: bool,
+    attempt: u32,
 ) -> Result<(Value, String)> {
     match node.kind.as_str() {
         "manual_trigger" | "webhook_trigger" | "schedule_trigger" | "email_trigger" => {
@@ -748,10 +903,18 @@ async fn run_node(
             let b = condition(&node.config, input, outputs)?;
             Ok((input.clone(), b.to_string()))
         }
-        "http_request" => Ok((
-            http_node(&node.config, input, outputs, allow_private).await?,
-            String::new(),
-        )),
+        "http_request" => {
+            let (result, attempts) =
+                http_node_with_attempts(&node.config, input, outputs, allow_private).await;
+            // Attempt reports are observability only: an older backend without
+            // the endpoint, or a lost lease, must not change the node's result.
+            for request in &attempts {
+                if let Err(error) = api.attempt(job, &node.id, attempt, request).await {
+                    eprintln!("job {}: attempt report for {}: {error}", job.id, node.id);
+                }
+            }
+            Ok((result?, String::new()))
+        }
         "send_email" => {
             let cred = api
                 .credential(
@@ -961,6 +1124,14 @@ mod tests {
             "http_request",
             &json!({"method":"post","idempotency_key":""})
         ))
+    }
+    #[test]
+    fn attempt_errors_are_capped_on_character_boundaries() {
+        let short = "HTTP 500: nope";
+        assert_eq!(cap_error(short), short);
+        let long = cap_error(&"é".repeat(3000));
+        assert!(long.len() <= 4096 && long.len() >= 4090, "{}", long.len());
+        assert!(long.chars().all(|c| c == 'é'));
     }
     #[test]
     fn render_limits_expansion_and_depth() {

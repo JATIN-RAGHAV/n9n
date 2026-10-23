@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func (s *Server) internal(w http.ResponseWriter, r *http.Request, p []string) {
@@ -91,6 +92,8 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 			Error      string `json:"error"`
 			Branch     string `json:"branch"`
 			Attempt    int    `json:"attempt"`
+			StartedAt  string `json:"started_at"`
+			DurationMs *int   `json:"duration_ms"`
 		}
 		if e := decodeLimit(r, &a, 4<<20); e != nil {
 			fail(w, 400, e.Error())
@@ -106,6 +109,21 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 		if a.Branch != "" && a.Branch != "true" && a.Branch != "false" {
 			fail(w, 400, "invalid branch")
 			return
+		}
+		var startedAt, finishedAt any
+		if a.StartedAt != "" {
+			if _, e := time.Parse(time.RFC3339Nano, a.StartedAt); e != nil {
+				fail(w, 400, "invalid started_at")
+				return
+			}
+			startedAt = a.StartedAt
+		}
+		if a.DurationMs != nil && (*a.DurationMs < 0 || *a.DurationMs > 7*24*3600*1000) {
+			fail(w, 400, "invalid duration_ms")
+			return
+		}
+		if a.Status != "running" {
+			finishedAt = now()
 		}
 		tx, e := s.db.Begin()
 		if e != nil {
@@ -132,8 +150,73 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 			fail(w, 400, "node not in workflow")
 			return
 		}
-		_, e = tx.Exec(`INSERT INTO steps(run_id,node_id,status,input,output,error,branch,attempt,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, runID, a.NodeID, a.Status, jsonText(a.Input), jsonText(a.Output), a.Error, a.Branch, a.Attempt, now())
+		_, e = tx.Exec(`INSERT INTO steps(run_id,node_id,status,input,output,error,branch,attempt,started_at,finished_at,duration_ms,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, runID, a.NodeID, a.Status, jsonText(a.Input), jsonText(a.Output), a.Error, a.Branch, a.Attempt, startedAt, finishedAt, a.DurationMs, now())
 		if e != nil {
+			fail(w, 500, "database error")
+			return
+		}
+		if e = tx.Commit(); e != nil {
+			fail(w, 500, "database error")
+			return
+		}
+		write(w, 200, map[string]bool{"ok": true})
+		return
+	case "attempts":
+		var a struct {
+			LeaseToken  string `json:"lease_token"`
+			NodeID      string `json:"node_id"`
+			StepAttempt *int   `json:"step_attempt"`
+			Attempt     int    `json:"attempt"`
+			Status      string `json:"status"`
+			HTTPStatus  *int   `json:"http_status"`
+			Error       string `json:"error"`
+			DurationMs  int    `json:"duration_ms"`
+		}
+		if e := decode(r, &a); e != nil {
+			fail(w, 400, e.Error())
+			return
+		}
+		if a.NodeID == "" || (a.Status != "succeeded" && a.Status != "failed") || a.Attempt < 1 || a.Attempt > 100 || a.DurationMs < 0 || a.DurationMs > 7*24*3600*1000 {
+			fail(w, 400, "invalid attempt")
+			return
+		}
+		if a.StepAttempt != nil && (*a.StepAttempt < 1 || *a.StepAttempt > 100) {
+			fail(w, 400, "invalid step_attempt")
+			return
+		}
+		if a.HTTPStatus != nil && (*a.HTTPStatus < 100 || *a.HTTPStatus > 599) {
+			fail(w, 400, "invalid http_status")
+			return
+		}
+		a.Error = truncateUTF8(a.Error, 4096)
+		tx, e := s.db.Begin()
+		if e != nil {
+			fail(w, 500, "database error")
+			return
+		}
+		defer tx.Rollback()
+		var graphStr string
+		e = tx.QueryRow(`SELECT COALESCE(r.graph_snapshot,v.graph) FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.id=$1 AND r.status='running' AND r.lease_token=$2 AND r.lease_until>$3 FOR UPDATE OF r`, runID, a.LeaseToken, now()).Scan(&graphStr)
+		if e != nil {
+			fail(w, 409, "lease expired")
+			return
+		}
+		var graph Graph
+		_ = json.Unmarshal([]byte(graphStr), &graph)
+		found := false
+		for _, n := range graph.Nodes {
+			if n.ID == a.NodeID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fail(w, 400, "node not in workflow")
+			return
+		}
+		// A runner that retries the report after a lost response sends the
+		// same step attempt and attempt number again; keep the first copy.
+		if _, e = tx.Exec(`INSERT INTO step_attempts(run_id,node_id,step_attempt,attempt,status,http_status,error,duration_ms,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (run_id,node_id,step_attempt,attempt) WHERE step_attempt IS NOT NULL DO NOTHING`, runID, a.NodeID, a.StepAttempt, a.Attempt, a.Status, a.HTTPStatus, a.Error, a.DurationMs, now()); e != nil {
 			fail(w, 500, "database error")
 			return
 		}
@@ -171,6 +254,19 @@ func (s *Server) internalJobs(w http.ResponseWriter, r *http.Request, p []string
 		return
 	}
 	fail(w, 404, "not found")
+}
+
+// truncateUTF8 shortens s to at most max bytes without splitting a character,
+// which PostgreSQL would reject as invalid text.
+func truncateUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 func (s *Server) claim(runner string) (any, error) {
 	tx, e := s.db.Begin()
@@ -240,10 +336,10 @@ func (s *Server) claim(runner string) (any, error) {
 			return nil, e
 		}
 	}
-	var rid, wid, graphStr, inputStr string
+	var rid, wid, graphStr, inputStr, kind string
 	var version int
 	var isTest bool
-	e = tx.QueryRow(`SELECT r.id,r.workflow_id,r.version,COALESCE(r.graph_snapshot,v.graph),r.input,r.is_test FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.status='queued' ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED`).Scan(&rid, &wid, &version, &graphStr, &inputStr, &isTest)
+	e = tx.QueryRow(`SELECT r.id,r.workflow_id,r.version,COALESCE(r.graph_snapshot,v.graph),r.input,r.is_test,r.kind FROM runs r LEFT JOIN versions v ON v.workflow_id=r.workflow_id AND v.version=r.version WHERE r.status='queued' ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED`).Scan(&rid, &wid, &version, &graphStr, &inputStr, &isTest, &kind)
 	if errors.Is(e, sql.ErrNoRows) {
 		return nil, tx.Commit()
 	}
@@ -278,7 +374,7 @@ func (s *Server) claim(runner string) (any, error) {
 	if e = tx.Commit(); e != nil {
 		return nil, e
 	}
-	return map[string]any{"id": rid, "lease_token": lease, "workflow_id": wid, "version": version, "test": isTest, "graph": graph, "input": input, "steps": steps}, nil
+	return map[string]any{"id": rid, "lease_token": lease, "workflow_id": wid, "version": version, "test": isTest, "kind": kind, "graph": graph, "input": input, "steps": steps}, nil
 }
 func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []string) {
 	if len(p) == 0 && r.Method == "GET" {
@@ -432,5 +528,5 @@ func (s *Server) internalTriggers(w http.ResponseWriter, r *http.Request, p []st
 		fail(w, 500, "database error")
 		return
 	}
-	write(w, 200, map[string]any{"run": Run{ID: rid, WorkflowID: wid, Version: a.Version, Status: "queued", Input: a.Input, CreatedAt: t, UpdatedAt: t}, "duplicate": false})
+	write(w, 200, map[string]any{"run": Run{ID: rid, WorkflowID: wid, Version: a.Version, Kind: "normal", Status: "queued", Input: a.Input, CreatedAt: t, UpdatedAt: t}, "duplicate": false})
 }

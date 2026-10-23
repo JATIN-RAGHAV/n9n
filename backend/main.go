@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -65,25 +66,43 @@ type Workflow struct {
 	UpdatedAt        string `json:"updated_at"`
 }
 type Run struct {
-	ID         string `json:"id"`
-	WorkflowID string `json:"workflow_id"`
-	Version    int    `json:"version"`
-	Test       bool   `json:"test,omitempty"`
-	Status     string `json:"status"`
-	Input      any    `json:"input"`
-	Error      string `json:"error,omitempty"`
-	CreatedAt  string `json:"created_at"`
-	UpdatedAt  string `json:"updated_at"`
+	ID             string  `json:"id"`
+	WorkflowID     string  `json:"workflow_id"`
+	Version        int     `json:"version"`
+	Kind           string  `json:"kind"`
+	Test           bool    `json:"test,omitempty"`
+	ParentRunID    *string `json:"parent_run_id,omitempty"`
+	ResumeFromNode string  `json:"resume_from_node,omitempty"`
+	Status         string  `json:"status"`
+	Input          any     `json:"input"`
+	Error          string  `json:"error,omitempty"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
 }
 type Step struct {
-	NodeID    string `json:"node_id"`
-	Status    string `json:"status"`
-	Input     any    `json:"input"`
-	Output    any    `json:"output"`
-	Error     string `json:"error,omitempty"`
-	Branch    string `json:"branch,omitempty"`
-	Attempt   int    `json:"attempt"`
-	CreatedAt string `json:"created_at"`
+	NodeID     string        `json:"node_id"`
+	Status     string        `json:"status"`
+	Input      any           `json:"input"`
+	Output     any           `json:"output"`
+	Error      string        `json:"error,omitempty"`
+	Branch     string        `json:"branch,omitempty"`
+	Attempt    int           `json:"attempt"`
+	StartedAt  string        `json:"started_at,omitempty"`
+	FinishedAt string        `json:"finished_at,omitempty"`
+	DurationMs *int          `json:"duration_ms,omitempty"`
+	Attempts   []StepAttempt `json:"attempts,omitempty"`
+	CreatedAt  string        `json:"created_at"`
+}
+
+// StepAttempt is one HTTP request made by a node, including internal retries.
+type StepAttempt struct {
+	StepAttempt *int   `json:"step_attempt,omitempty"`
+	Attempt     int    `json:"attempt"`
+	Status      string `json:"status"`
+	HTTPStatus  *int   `json:"http_status,omitempty"`
+	Error       string `json:"error,omitempty"`
+	DurationMs  int    `json:"duration_ms"`
+	CreatedAt   string `json:"created_at"`
 }
 
 var nodeTypes = map[string]bool{"manual_trigger": true, "webhook_trigger": true, "schedule_trigger": true, "email_trigger": true, "set_fields": true, "http_request": true, "condition": true, "send_email": true}
@@ -190,49 +209,16 @@ func migrate(db *sql.DB) error {
 	if err = tx.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil {
 		return err
 	}
-	if version > 4 {
+	if version > len(migrations) {
 		return errors.New("database schema is newer than this server")
 	}
-	if version == 0 {
-		for _, q := range schema {
-			if _, err = tx.Exec(q); err != nil {
-				return err
-			}
-		}
-		if _, err = tx.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(1,$1)`, now()); err != nil {
-			return err
-		}
-		version = 1
-	}
-	if version < 2 {
-		for _, q := range migration2 {
+	for i := version; i < len(migrations); i++ {
+		for _, q := range migrations[i] {
 			if _, err = tx.ExecContext(ctx, q); err != nil {
-				return err
+				return fmt.Errorf("migration %d: %w", i+1, err)
 			}
 		}
-		if _, err = tx.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(2,$1)`, now()); err != nil {
-			return err
-		}
-		version = 2
-	}
-	if version < 3 {
-		for _, q := range migration3 {
-			if _, err = tx.ExecContext(ctx, q); err != nil {
-				return err
-			}
-		}
-		if _, err = tx.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(3,$1)`, now()); err != nil {
-			return err
-		}
-		version = 3
-	}
-	if version < 4 {
-		for _, q := range migration4 {
-			if _, err = tx.ExecContext(ctx, q); err != nil {
-				return err
-			}
-		}
-		if _, err = tx.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(4,$1)`, now()); err != nil {
+		if _, err = tx.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES($1,$2)`, i+1, now()); err != nil {
 			return err
 		}
 	}
@@ -298,6 +284,36 @@ var migration4 = []string{
 	`CREATE OR REPLACE FUNCTION enforce_run_snapshot_version() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.is_test THEN IF NEW.graph_snapshot IS NULL OR NEW.version < 0 THEN RAISE EXCEPTION 'draft test run requires a nonnegative version and graph snapshot'; END IF; ELSE IF NEW.graph_snapshot IS NOT NULL OR NOT EXISTS (SELECT 1 FROM versions WHERE workflow_id=NEW.workflow_id AND version=NEW.version) THEN RAISE EXCEPTION 'published run must reference an existing graph version'; END IF; END IF; RETURN NEW; END; $$`,
 	`CREATE TRIGGER runs_snapshot_version_integrity BEFORE INSERT OR UPDATE OF workflow_id,version,is_test,graph_snapshot ON runs FOR EACH ROW EXECUTE FUNCTION enforce_run_snapshot_version()`,
 }
+
+var migration5 = []string{
+	`ALTER TABLE runs ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'normal'`,
+	`UPDATE runs SET kind='test' WHERE is_test`,
+	`ALTER TABLE runs ADD COLUMN IF NOT EXISTS parent_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL`,
+	`ALTER TABLE runs ADD COLUMN IF NOT EXISTS resume_from_node TEXT`,
+	`ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_snapshot_mode_check`,
+	`ALTER TABLE runs ADD CONSTRAINT runs_kind_check CHECK (kind IN ('normal','test','replay','shadow') AND is_test = (kind='test'))`,
+	`ALTER TABLE runs ADD CONSTRAINT runs_snapshot_mode_check CHECK ((kind<>'normal' AND graph_snapshot IS NOT NULL AND version >= 0) OR (kind='normal' AND graph_snapshot IS NULL AND version > 0))`,
+	`CREATE OR REPLACE FUNCTION enforce_run_snapshot_version() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.is_test AND NEW.kind='normal' THEN NEW.kind := 'test'; END IF; IF NEW.kind='test' THEN NEW.is_test := TRUE; END IF; IF NEW.kind<>'normal' THEN IF NEW.graph_snapshot IS NULL OR NEW.version < 0 THEN RAISE EXCEPTION '% run requires a nonnegative version and graph snapshot', NEW.kind; END IF; ELSE IF NEW.graph_snapshot IS NOT NULL OR NOT EXISTS (SELECT 1 FROM versions WHERE workflow_id=NEW.workflow_id AND version=NEW.version) THEN RAISE EXCEPTION 'published run must reference an existing graph version'; END IF; END IF; RETURN NEW; END; $$`,
+	`DROP TRIGGER IF EXISTS runs_snapshot_version_integrity ON runs`,
+	`CREATE TRIGGER runs_snapshot_version_integrity BEFORE INSERT OR UPDATE OF workflow_id,version,is_test,graph_snapshot,kind ON runs FOR EACH ROW EXECUTE FUNCTION enforce_run_snapshot_version()`,
+	`CREATE INDEX IF NOT EXISTS runs_parent ON runs(parent_run_id)`,
+	`ALTER TABLE steps ADD COLUMN IF NOT EXISTS started_at TEXT`,
+	`ALTER TABLE steps ADD COLUMN IF NOT EXISTS finished_at TEXT`,
+	`ALTER TABLE steps ADD COLUMN IF NOT EXISTS duration_ms INTEGER`,
+	`CREATE TABLE IF NOT EXISTS step_attempts(id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,node_id TEXT NOT NULL,attempt INTEGER NOT NULL,status TEXT NOT NULL,http_status INTEGER,error TEXT NOT NULL DEFAULT '',duration_ms INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL)`,
+	`CREATE INDEX IF NOT EXISTS step_attempts_run ON step_attempts(run_id,node_id)`,
+}
+
+// Attempts are scoped to the execution attempt of their step, so a resumed
+// node keeps the requests of each execution apart; the partial unique index
+// lets a repeated report be ignored.
+var migration6 = []string{
+	`ALTER TABLE step_attempts ADD COLUMN IF NOT EXISTS step_attempt INTEGER`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS step_attempts_scoped ON step_attempts(run_id,node_id,step_attempt,attempt) WHERE step_attempt IS NOT NULL`,
+}
+
+// migrations[i] upgrades the schema from version i to i+1.
+var migrations = [][]string{schema, migration2, migration3, migration4, migration5, migration6}
 
 func id() string { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
 
@@ -411,7 +427,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch parts[0] {
 	case "nodes":
 		if len(parts) == 1 && r.Method == "GET" {
-			write(w, 200, map[string]any{"version": 1, "nodes": catalog})
+			write(w, 200, map[string]any{"version": catalogVersion, "nodes": catalog})
+			return
+		}
+	case "features":
+		if len(parts) == 1 && r.Method == "GET" {
+			write(w, 200, map[string]any{"features": features()})
 			return
 		}
 	case "workflows":

@@ -1,4 +1,5 @@
-use n9n_runner::{http_node, Result};
+use n9n_runner::{http_node, safe_http_client, Result};
+use reqwest::Url;
 use serde_json::json;
 use std::{
     collections::HashMap,
@@ -88,4 +89,51 @@ async fn interrupted_post_is_uncertain() {
     let (url, _) = endpoint(Vec::new()).await;
     let err = run(&url, "POST", json!({"name":"Ada"})).await.unwrap_err();
     assert!(err.starts_with("uncertain:"), "{err}");
+}
+
+#[tokio::test]
+async fn ipv6_literal_hosts_reach_the_address_check() {
+    for url in [
+        "http://[::1]:9/",
+        "http://[::ffff:127.0.0.1]/",
+        "http://[fd00::1]/",
+    ] {
+        let err = safe_http_client(&Url::parse(url).unwrap(), false)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "private or reserved HTTP address blocked", "{url}");
+    }
+    assert!(safe_http_client(
+        &Url::parse("https://[2606:4700:4700::1111]/").unwrap(),
+        false
+    )
+    .await
+    .is_ok());
+}
+
+#[tokio::test]
+async fn ipv6_literal_host_connects_when_private_allowed() {
+    let Ok(listener) = TcpListener::bind("[::1]:0").await else {
+        return;
+    };
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = [0u8; 1024];
+        let _ = socket.read(&mut buffer).await;
+        socket
+            .write_all(&response("200 OK", "{\"ok\":true}"))
+            .await
+            .unwrap();
+    });
+    let out = http_node(
+        &json!({"url":format!("http://[::1]:{port}/"),"method":"GET"}),
+        &json!({}),
+        &HashMap::new(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out["status"], 200);
+    assert_eq!(out["body"]["ok"], true);
 }
