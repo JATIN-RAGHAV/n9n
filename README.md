@@ -1,5 +1,7 @@
 # n9n
 
+_Last updated: 2026-10-30 23:43 IST · Claude Opus 5.5 (claude-opus-5-5)_
+
 n9n is a visual workflow automation workspace. You build workflows in a Flutter Web editor or the React Native mobile app. A Go API stores them in PostgreSQL, and a Rust worker runs them.
 
 ## System architecture
@@ -11,20 +13,19 @@ n9n is a visual workflow automation workspace. You build workflows in a Flutter 
 ### Requirements
 
 - Docker with Compose
-- Make
-- Python 3
-- Enough disk space to build the Flutter, Go, and Rust images
+- Enough disk space to build the Flutter, Go, and Rust images (about 10 GB free)
 
 ### Start the stack
 
 ```sh
-make setup
-make up
+docker compose up --build -d --wait
 ```
 
-`make setup` creates `.env` from `.env.example` and fills in a random `RUNNER_TOKEN` and `ENCRYPTION_KEY`. It runs only once, so an existing `.env` is left unchanged. Keep this file: losing `ENCRYPTION_KEY` makes saved credentials unreadable.
+No `.env` file is needed. On the first start, the one-off `secrets` service creates a random `ENCRYPTION_KEY` and `RUNNER_TOKEN` for this machine and keeps them in the `secrets` Docker volume; later starts reuse them. Never commit or share these keys: each machine makes its own. Deleting the `secrets` volume (for example with `docker compose down -v`) makes saved credentials unreadable.
 
-`make up` builds and starts four containers and waits until they are healthy:
+To set your own keys or other settings, create `.env` instead: `make setup` (needs Make and Python 3) copies `.env.example` and fills in random keys. Values in `.env` take precedence over the generated ones. `make up` runs `make setup` and then the command above.
+
+The command builds and starts four containers and waits until they are healthy:
 
 | Service | Purpose | Local address |
 | --- | --- | --- |

@@ -28,11 +28,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      secrets:
+        condition: service_completed_successfully
+    # Uses ENCRYPTION_KEY and RUNNER_TOKEN from .env when set; otherwise the
+    # keys the secrets service generated for this machine.
+    entrypoint: ["/bin/sh", "-c", ". /secrets/env && export ENCRYPTION_KEY=\"$${ENCRYPTION_KEY:-$$GEN_ENCRYPTION_KEY}\" RUNNER_TOKEN=\"$${RUNNER_TOKEN:-$$GEN_RUNNER_TOKEN}\" && exec \"$$@\"", "--"]
+    command: ["/usr/local/bin/n9n-backend"]
+    volumes:
+      - secrets:/secrets:ro
     environment:
       ADDR: :8080
       DATABASE_URL: ${DATABASE_URL:-postgres://n9n:n9n_local_dev@postgres:5432/n9n?sslmode=disable}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Run make setup first}
-      RUNNER_TOKEN: ${RUNNER_TOKEN:?Run make setup first}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:8080}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
@@ -54,9 +62,14 @@ services:
     build:
       context: .
       dockerfile: runner/Dockerfile
+    # Same key source as the backend, so both always share one RUNNER_TOKEN.
+    entrypoint: ["/bin/sh", "-c", ". /secrets/env && export RUNNER_TOKEN=\"$${RUNNER_TOKEN:-$$GEN_RUNNER_TOKEN}\" && exec \"$$@\"", "--"]
+    command: ["/usr/local/bin/n9n-runner"]
+    volumes:
+      - secrets:/secrets:ro
     environment:
       BACKEND_URL: http://backend:8080
-      RUNNER_TOKEN: ${RUNNER_TOKEN:?Run make setup first}
+      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
       RUNNER_ID: ${RUNNER_ID:-runner-1}
       RUNNER_POLL_MS: ${RUNNER_POLL_MS:-1000}
       RUNNER_CONCURRENCY: ${RUNNER_CONCURRENCY:-4}
@@ -93,5 +106,26 @@ services:
     mem_limit: 512m
     restart: unless-stopped
 
+  # Runs once at startup. On the first run it creates random ENCRYPTION_KEY and
+  # RUNNER_TOKEN values in the `secrets` volume, so no .env is needed. Later runs
+  # keep them: deleting the volume makes saved credentials unreadable.
+  secrets:
+    image: alpine:3.22
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        f=/secrets/env
+        [ -s "$$f" ] && exit 0
+        hex() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+        printf 'GEN_ENCRYPTION_KEY=%s\nGEN_RUNNER_TOKEN=%s\n' "$$(hex)" "$$(hex)" > "$$f.tmp"
+        chmod 644 "$$f.tmp"
+        mv "$$f.tmp" "$$f"
+    volumes:
+      - secrets:/secrets
+    restart: "no"
+
 volumes:
   postgres_data:
+  secrets:
