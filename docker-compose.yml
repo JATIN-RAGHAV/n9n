@@ -22,6 +22,12 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    # Start only after the local database accepts connections. When
+    # DATABASE_URL points at an external database, this still waits for the
+    # bundled postgres service, which is harmless.
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       ADDR: :8080
       DATABASE_URL: ${DATABASE_URL:-postgres://n9n:n9n_local_dev@postgres:5432/n9n?sslmode=disable}
