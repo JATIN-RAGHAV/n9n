@@ -1,9 +1,11 @@
 # Papers for n9n
 
-_Last updated: 2026-10-23 08:40 (14:10 IST) · Claude Fable 5.1 (claude-fable-5-1)_
+_Last updated: 2026-10-31 IST · Claude Opus 5.5 (claude-opus-5-5)_
 
 | File | What it is |
 | --- | --- |
+| `n9n_Project_Report.docx` | B.Tech 7th-semester project report in the MIET format (`UPDATED_PROJECT REPORT FORMAT - 7th sem (1).docx`): 5 chapters, 15 figures, 18 tables, 27 references. Yellow-highlighted values (HOD name, subject code, month) are unconfirmed. Fields (contents, page numbers) update when Word opens it. |
+| `UPDATED_PROJECT REPORT FORMAT - 7th sem (1).docx` | The department's report format (input, not produced here). |
 | `AI_Workflow_Agentic_Orchestration_SEO_Research_Paper.pdf` | Research paper "AI Workflow using Agentic Orchestration and SEO" (IEEE conference format, 11 pages): review of 24 works (22 papers plus the n8n and LangGraph documentation), research gap, the n9n design, and a measured evaluation of the implemented substrate at commit `bcc035d`. |
 | `research-paper-src/` | LaTeX source (`n9n_paper.tex`, vendored `IEEEtran.cls`), generated number macros and table bodies, and `build.sh`. |
 | `research-paper-src/experiments/` | The measurement harness that produced every number in Section VIII: `run_experiments.py` (drives the public API, manages the worker process), `mock_site.py` (local web site for the SEO and fault cases), `gen_tables.py` (results → LaTeX), `results.json` (final data), `results-run1.json` (first pass, before the makespan method and the flaky page were corrected; kept for the record), `go-test-2026-10-23.log` and `cargo-test-2026-10-23.log` (the test-suite runs cited in Table II). |
