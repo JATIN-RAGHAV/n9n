@@ -4,7 +4,7 @@ _Last updated: 2026-10-31 IST · Claude Opus 5.5 (claude-opus-5-5)_
 
 | File | What it is |
 | --- | --- |
-| `n9n_Project_Report.docx` | B.Tech 7th-semester project report in the MIET format (`UPDATED_PROJECT REPORT FORMAT - 7th sem (1).docx`): 5 chapters, 15 figures, 18 tables, 27 references. Yellow-highlighted values (HOD name, subject code, month) are unconfirmed. Fields (contents, page numbers) update when Word opens it. |
+| `n9n_Project_Report.docx` | B.Tech 7th-semester project report laid out like the MIET sample (`UPDATED_PROJECT REPORT FORMAT - 7th sem (1).docx`): cover, contents table, declaration, certificate and acknowledgement in the sample's layout; 5 chapters, 15 figures, 18 tables, 27 references. Yellow-highlighted values (HOD name, subject code, month) are unconfirmed. Fields (contents, page numbers) update when Word opens it. |
 | `UPDATED_PROJECT REPORT FORMAT - 7th sem (1).docx` | The department's report format (input, not produced here). |
 | `AI_Workflow_Agentic_Orchestration_SEO_Research_Paper.pdf` | Research paper "AI Workflow using Agentic Orchestration and SEO" (IEEE conference format, 11 pages): review of 24 works (22 papers plus the n8n and LangGraph documentation), research gap, the n9n design, and a measured evaluation of the implemented substrate at commit `bcc035d`. |
 | `research-paper-src/` | LaTeX source (`n9n_paper.tex`, vendored `IEEEtran.cls`), generated number macros and table bodies, and `build.sh`. |
